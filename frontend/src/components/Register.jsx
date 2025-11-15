@@ -5,6 +5,7 @@ import '../css/components.css';
 const PatientRegistration = () => {
   const [currentStep, setCurrentStep] = useState(1);
   const totalSteps = 4;
+  const [isLoading, setIsLoading] = useState(false);
 
   const [formData, setFormData] = useState({
     // Personal Information
@@ -31,33 +32,45 @@ const PatientRegistration = () => {
     confirmPassword: '',
     termsConsent: false,
     dataConsent: false,
-    smsConsent: false
+    smsConsent: false,
   });
 
   const [confirmation, setConfirmation] = useState({
     uic: '',
     username: '',
-    branch: ''
+    branch: '',
   });
 
   const [selectedBranch, setSelectedBranch] = useState('');
   const [facilities, setFacilities] = useState([]);
   const [errors, setErrors] = useState({});
+  const [apiError, setApiError] = useState('');
 
   // Fetch facilities on component mount
   useEffect(() => {
     const fetchFacilities = async () => {
+      setIsLoading(true);
       try {
         const res = await fetch('http://localhost:5000/api/facilities');
         const data = await res.json();
-        if (data.success && data.facilities && data.facilities.length > 0) {
-          setFacilities(data.facilities);
+        if (data.success && data.data && data.data.length > 0) {
+          setFacilities(data.data);
           // Set first facility as default
-          setSelectedBranch(data.facilities[0].facility_id);
-          setFormData(prev => ({ ...prev, branch: data.facilities[0].facility_id }));
+          setSelectedBranch(data.data[0].facility_id);
+          setFormData((prev) => ({
+            ...prev,
+            branch: data.data[0].facility_id,
+          }));
+        } else {
+          setApiError('Failed to load facilities. Please refresh the page.');
         }
       } catch (err) {
         console.error('Failed to fetch facilities:', err);
+        setApiError(
+          'Network error. Please check your connection and try again.'
+        );
+      } finally {
+        setIsLoading(false);
       }
     };
     fetchFacilities();
@@ -92,6 +105,9 @@ const PatientRegistration = () => {
       .branch-card input[type="radio"] { display: none; }
       .success-icon { font-size: 64px; text-align: center; margin: 20px 0; }
       .error-message { color: var(--danger-color); font-size: 12px; margin-top: 5px; }
+      .api-error { background-color: #fee; border: 1px solid #fcc; color: #c33; padding: 10px; border-radius: 4px; margin-bottom: 15px; }
+      .loading-spinner { display: inline-block; width: 20px; height: 20px; border: 3px solid rgba(255,255,255,.3); border-radius: 50%; border-top-color: #fff; animation: spin 1s ease-in-out infinite; }
+      @keyframes spin { to { transform: rotate(360deg); } }
     `;
     document.head.appendChild(styleElement);
 
@@ -100,19 +116,21 @@ const PatientRegistration = () => {
     };
   }, []);
 
-
   const handleInputChange = (e) => {
     const { name, value, type, checked } = e.target;
-    setFormData(prev => ({ ...prev, [name]: type === 'checkbox' ? checked : value }));
+    setFormData((prev) => ({
+      ...prev,
+      [name]: type === 'checkbox' ? checked : value,
+    }));
 
     if (errors[name]) {
-      setErrors(prev => ({ ...prev, [name]: '' }));
+      setErrors((prev) => ({ ...prev, [name]: '' }));
     }
   };
 
   const handleBranchChange = (branchId) => {
     setSelectedBranch(branchId);
-    setFormData(prev => ({ ...prev, branch: branchId }));
+    setFormData((prev) => ({ ...prev, branch: branchId }));
   };
 
   const validateStep = (step) => {
@@ -121,25 +139,36 @@ const PatientRegistration = () => {
     if (step === 1) {
       if (!formData.firstName) newErrors.firstName = 'First name is required';
       if (!formData.lastName) newErrors.lastName = 'Last name is required';
-      if (!formData.birthDate) newErrors.birthDate = 'Date of birth is required';
+      if (!formData.birthDate)
+        newErrors.birthDate = 'Date of birth is required';
       if (!formData.sex) newErrors.sex = 'Sex is required';
-      if (!formData.civilStatus) newErrors.civilStatus = 'Civil status is required';
+      if (!formData.civilStatus)
+        newErrors.civilStatus = 'Civil status is required';
     } else if (step === 2) {
-      if (!formData.contactPhone) newErrors.contactPhone = 'Mobile number is required';
+      if (!formData.contactPhone)
+        newErrors.contactPhone = 'Mobile number is required';
       if (!formData.email) newErrors.email = 'Email is required';
       if (!formData.currentCity) newErrors.currentCity = 'City is required';
-      if (!formData.currentProvince) newErrors.currentProvince = 'Province is required';
+      if (!formData.currentProvince)
+        newErrors.currentProvince = 'Province is required';
       if (!formData.branch) newErrors.branch = 'Please select a branch';
     } else if (step === 3) {
       if (!formData.username) newErrors.username = 'Username is required';
-      if (formData.username.length < 4) newErrors.username = 'Username must be at least 4 characters';
-      if (formData.username.includes(' ')) newErrors.username = 'Username cannot contain spaces';
+      if (formData.username.length < 4)
+        newErrors.username = 'Username must be at least 4 characters';
+      if (formData.username.includes(' '))
+        newErrors.username = 'Username cannot contain spaces';
       if (!formData.password) newErrors.password = 'Password is required';
-      if (formData.password.length < 6) newErrors.password = 'Password must be at least 6 characters';
-      if (!formData.confirmPassword) newErrors.confirmPassword = 'Please confirm your password';
-      if (formData.password !== formData.confirmPassword) newErrors.confirmPassword = 'Passwords do not match';
-      if (!formData.termsConsent) newErrors.termsConsent = 'You must agree to the terms and conditions';
-      if (!formData.dataConsent) newErrors.dataConsent = 'You must consent to data processing';
+      if (formData.password.length < 6)
+        newErrors.password = 'Password must be at least 6 characters';
+      if (!formData.confirmPassword)
+        newErrors.confirmPassword = 'Please confirm your password';
+      if (formData.password !== formData.confirmPassword)
+        newErrors.confirmPassword = 'Passwords do not match';
+      if (!formData.termsConsent)
+        newErrors.termsConsent = 'You must agree to the terms and conditions';
+      if (!formData.dataConsent)
+        newErrors.dataConsent = 'You must consent to data processing';
     }
 
     setErrors(newErrors);
@@ -147,54 +176,86 @@ const PatientRegistration = () => {
   };
 
   const nextStep = () => {
-    if (validateStep(currentStep) && currentStep < totalSteps) setCurrentStep(currentStep + 1);
+    if (validateStep(currentStep) && currentStep < totalSteps)
+      setCurrentStep(currentStep + 1);
   };
 
   const previousStep = () => {
     if (currentStep > 1) setCurrentStep(currentStep - 1);
   };
 
-  const showTerms = () => alert('Terms and Conditions:\n\n[...Your terms here...]');
-  const showPrivacy = () => alert('Privacy Policy:\n\n[...Your privacy here...]');
+  const showTerms = () =>
+    alert('Terms and Conditions:\n\n[...Your terms here...]');
+  const showPrivacy = () =>
+    alert('Privacy Policy:\n\n[...Your privacy here...]');
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!validateStep(3)) return;
 
+    setIsLoading(true);
+    setApiError('');
+
     try {
-      const res = await fetch('http://localhost:5000/api/auth/register', {
+      const res = await fetch('http://localhost:5000/api/patients/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData)
+        body: JSON.stringify(formData),
       });
 
       const data = await res.json();
 
       if (res.ok && data.success) {
         const payload = data.data || {};
+        const selectedFacility = facilities.find(
+          (f) => f.facility_id === formData.branch
+        );
+
         setConfirmation({
           uic: payload.uic || '',
-          username: payload.username || '',
-          branch: formData.branch || ''
+          username: payload.username || formData.username,
+          branch: selectedFacility
+            ? selectedFacility.facility_name
+            : 'My Hub Cares',
         });
         setCurrentStep(4);
       } else {
-        alert((data && data.message) || 'Registration failed. Please try again.');
+        setApiError(
+          (data && data.message) || 'Registration failed. Please try again.'
+        );
       }
     } catch (err) {
       console.error(err);
-      alert('Server error. Please try again later.');
+      setApiError('Server error. Please try again later.');
+    } finally {
+      setIsLoading(false);
     }
   };
+
   return (
     <div className="login-page">
       <div className="registration-container">
         <div className="registration-card">
           <div className="registration-header">
             <div className="logo">
-              <svg width="60" height="60" viewBox="0 0 60 60" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <rect width="60" height="60" rx="10" fill="white" fillOpacity="0.2"/>
-                <path d="M30 15L20 25H26V35H22V45H30V35H34V45H42V35H38V25H44L30 15Z" fill="white"/>
+              <svg
+                width="60"
+                height="60"
+                viewBox="0 0 60 60"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <rect
+                  width="60"
+                  height="60"
+                  rx="10"
+                  fill="white"
+                  fillOpacity="0.2"
+                />
+                <path
+                  d="M30 15L20 25H26V35H22V45H30V35H34V45H42V35H38V25H44L30 15Z"
+                  fill="white"
+                />
               </svg>
             </div>
             <h1>Welcome to My Hub Cares!</h1>
@@ -204,55 +265,93 @@ const PatientRegistration = () => {
           <div className="registration-body">
             {/* Progress Steps */}
             <div className="progress-steps">
-              <div className={`step ${currentStep === 1 ? 'active' : currentStep > 1 ? 'completed' : ''}`} data-step="1">
+              <div
+                className={`step ${
+                  currentStep === 1
+                    ? 'active'
+                    : currentStep > 1
+                    ? 'completed'
+                    : ''
+                }`}
+                data-step="1"
+              >
                 <div className="step-circle">1</div>
                 <div className="step-label">Personal Info</div>
               </div>
-              <div className={`step ${currentStep === 2 ? 'active' : currentStep > 2 ? 'completed' : ''}`} data-step="2">
+              <div
+                className={`step ${
+                  currentStep === 2
+                    ? 'active'
+                    : currentStep > 2
+                    ? 'completed'
+                    : ''
+                }`}
+                data-step="2"
+              >
                 <div className="step-circle">2</div>
                 <div className="step-label">Contact Details</div>
               </div>
-              <div className={`step ${currentStep === 3 ? 'active' : currentStep > 3 ? 'completed' : ''}`} data-step="3">
+              <div
+                className={`step ${
+                  currentStep === 3
+                    ? 'active'
+                    : currentStep > 3
+                    ? 'completed'
+                    : ''
+                }`}
+                data-step="3"
+              >
                 <div className="step-circle">3</div>
                 <div className="step-label">Account Setup</div>
               </div>
-              <div className={`step ${currentStep === 4 ? 'active' : ''}`} data-step="4">
+              <div
+                className={`step ${currentStep === 4 ? 'active' : ''}`}
+                data-step="4"
+              >
                 <div className="step-circle">4</div>
                 <div className="step-label">Complete</div>
               </div>
             </div>
+
+            {apiError && <div className="api-error">{apiError}</div>}
 
             <form id="registrationForm" onSubmit={handleSubmit}>
               {/* Step 1: Personal Information */}
               {currentStep === 1 && (
                 <div className="registration-step active" data-step="1">
                   <div className="welcome-message">
-                    <strong>Welcome to My Hub Cares!</strong><br/>
-                    We're glad you're taking the first step. All information is confidential and secure.
+                    <strong>Welcome to My Hub Cares!</strong>
+                    <br />
+                    We're glad you're taking the first step. All information is
+                    confidential and secure.
                   </div>
 
                   <div className="form-section">
                     <h3>Personal Information</h3>
-                    
+
                     <div className="form-row">
                       <div className="form-group">
                         <label className="required">First Name</label>
-                        <input 
-                          type="text" 
-                          id="firstName" 
+                        <input
+                          type="text"
+                          id="firstName"
                           name="firstName"
                           value={formData.firstName}
                           onChange={handleInputChange}
-                          required 
+                          required
                           placeholder="Enter first name"
                         />
-                        {errors.firstName && <div className="error-message">{errors.firstName}</div>}
+                        {errors.firstName && (
+                          <div className="error-message">
+                            {errors.firstName}
+                          </div>
+                        )}
                       </div>
                       <div className="form-group">
                         <label>Middle Name</label>
-                        <input 
-                          type="text" 
-                          id="middleName" 
+                        <input
+                          type="text"
+                          id="middleName"
                           name="middleName"
                           value={formData.middleName}
                           onChange={handleInputChange}
@@ -264,21 +363,23 @@ const PatientRegistration = () => {
                     <div className="form-row">
                       <div className="form-group">
                         <label className="required">Last Name</label>
-                        <input 
-                          type="text" 
-                          id="lastName" 
+                        <input
+                          type="text"
+                          id="lastName"
                           name="lastName"
                           value={formData.lastName}
                           onChange={handleInputChange}
-                          required 
+                          required
                           placeholder="Enter last name"
                         />
-                        {errors.lastName && <div className="error-message">{errors.lastName}</div>}
+                        {errors.lastName && (
+                          <div className="error-message">{errors.lastName}</div>
+                        )}
                       </div>
                       <div className="form-group">
                         <label>Suffix</label>
-                        <select 
-                          id="suffix" 
+                        <select
+                          id="suffix"
                           name="suffix"
                           value={formData.suffix}
                           onChange={handleInputChange}
@@ -295,21 +396,27 @@ const PatientRegistration = () => {
                     <div className="form-row">
                       <div className="form-group">
                         <label className="required">Date of Birth</label>
-                        <input 
-                          type="date" 
-                          id="birthDate" 
+                        <input
+                          type="date"
+                          id="birthDate"
                           name="birthDate"
                           value={formData.birthDate}
                           onChange={handleInputChange}
-                          required 
+                          required
                           max="2010-12-31"
                         />
-                        {errors.birthDate && <div className="error-message">{errors.birthDate}</div>}
+                        {errors.birthDate && (
+                          <div className="error-message">
+                            {errors.birthDate}
+                          </div>
+                        )}
                       </div>
                       <div className="form-group">
-                        <label className="required">Sex Assigned at Birth</label>
-                        <select 
-                          id="sex" 
+                        <label className="required">
+                          Sex Assigned at Birth
+                        </label>
+                        <select
+                          id="sex"
                           name="sex"
                           value={formData.sex}
                           onChange={handleInputChange}
@@ -319,14 +426,16 @@ const PatientRegistration = () => {
                           <option value="M">Male</option>
                           <option value="F">Female</option>
                         </select>
-                        {errors.sex && <div className="error-message">{errors.sex}</div>}
+                        {errors.sex && (
+                          <div className="error-message">{errors.sex}</div>
+                        )}
                       </div>
                     </div>
 
                     <div className="form-group">
                       <label className="required">Civil Status</label>
-                      <select 
-                        id="civilStatus" 
+                      <select
+                        id="civilStatus"
                         name="civilStatus"
                         value={formData.civilStatus}
                         onChange={handleInputChange}
@@ -338,14 +447,18 @@ const PatientRegistration = () => {
                         <option value="Widowed">Widowed</option>
                         <option value="Separated">Separated</option>
                       </select>
-                      {errors.civilStatus && <div className="error-message">{errors.civilStatus}</div>}
+                      {errors.civilStatus && (
+                        <div className="error-message">
+                          {errors.civilStatus}
+                        </div>
+                      )}
                     </div>
 
                     <div className="form-group">
                       <label>Nationality</label>
-                      <input 
-                        type="text" 
-                        id="nationality" 
+                      <input
+                        type="text"
+                        id="nationality"
                         name="nationality"
                         value={formData.nationality}
                         onChange={handleInputChange}
@@ -360,72 +473,88 @@ const PatientRegistration = () => {
                 <div className="registration-step active" data-step="2">
                   <div className="form-section">
                     <h3>Contact Information</h3>
-                    
+
                     <div className="form-row">
                       <div className="form-group">
                         <label className="required">Mobile Number</label>
-                        <input 
-                          type="tel" 
-                          id="contactPhone" 
+                        <input
+                          type="tel"
+                          id="contactPhone"
                           name="contactPhone"
                           value={formData.contactPhone}
                           onChange={handleInputChange}
-                          required 
-                          placeholder="09XX-XXX-XXXX" 
+                          required
+                          placeholder="09XX-XXX-XXXX"
                           pattern="[0-9]{4}-[0-9]{3}-[0-9]{4}"
                         />
-                        <small className="text-muted">Format: 09XX-XXX-XXXX</small>
-                        {errors.contactPhone && <div className="error-message">{errors.contactPhone}</div>}
+                        <small className="text-muted">
+                          Format: 09XX-XXX-XXXX
+                        </small>
+                        {errors.contactPhone && (
+                          <div className="error-message">
+                            {errors.contactPhone}
+                          </div>
+                        )}
                       </div>
                       <div className="form-group">
                         <label className="required">Email Address</label>
-                        <input 
-                          type="email" 
-                          id="email" 
+                        <input
+                          type="email"
+                          id="email"
                           name="email"
                           value={formData.email}
                           onChange={handleInputChange}
-                          required 
+                          required
                           placeholder="your.email@example.com"
                         />
-                        {errors.email && <div className="error-message">{errors.email}</div>}
+                        {errors.email && (
+                          <div className="error-message">{errors.email}</div>
+                        )}
                       </div>
                     </div>
 
                     <div className="form-row">
                       <div className="form-group">
                         <label className="required">Current City</label>
-                        <input 
-                          type="text" 
-                          id="currentCity" 
+                        <input
+                          type="text"
+                          id="currentCity"
                           name="currentCity"
                           value={formData.currentCity}
                           onChange={handleInputChange}
-                          required 
+                          required
                           placeholder="Enter city"
                         />
-                        {errors.currentCity && <div className="error-message">{errors.currentCity}</div>}
+                        {errors.currentCity && (
+                          <div className="error-message">
+                            {errors.currentCity}
+                          </div>
+                        )}
                       </div>
                       <div className="form-group">
                         <label className="required">Current Province</label>
-                        <input 
-                          type="text" 
-                          id="currentProvince" 
+                        <input
+                          type="text"
+                          id="currentProvince"
                           name="currentProvince"
                           value={formData.currentProvince}
                           onChange={handleInputChange}
-                          required 
+                          required
                           placeholder="Enter province"
                         />
-                        {errors.currentProvince && <div className="error-message">{errors.currentProvince}</div>}
+                        {errors.currentProvince && (
+                          <div className="error-message">
+                            {errors.currentProvince}
+                          </div>
+                        )}
                       </div>
                     </div>
 
                     <div className="form-group">
                       <label>PhilHealth Number (if available)</label>
-                      <input 
-                        type="text" 
-                        id="philhealthNo" 
+                      <input
+                        type="text"
+                        id="philhealthNo"
                         name="philhealthNo"
                         value={formData.philhealthNo}
                         onChange={handleInputChange}
@@ -436,31 +565,52 @@ const PatientRegistration = () => {
 
                   <div className="form-section">
                     <h3>Preferred My Hub Cares Branch</h3>
-                    
-                    {facilities.length === 0 ? (
+
+                    {isLoading ? (
                       <div className="text-muted">Loading facilities...</div>
+                    ) : facilities.length === 0 ? (
+                      <div className="text-muted">
+                        No facilities available at the moment.
+                      </div>
                     ) : (
                       <>
                         <div className="branch-selection">
                           {facilities.map((facility) => (
-                            <label 
+                            <label
                               key={facility.facility_id}
-                              className={`branch-card ${selectedBranch === facility.facility_id ? 'selected' : ''}`}
-                              onClick={() => handleBranchChange(facility.facility_id)}
+                              className={`branch-card ${
+                                selectedBranch === facility.facility_id
+                                  ? 'selected'
+                                  : ''
+                              }`}
+                              onClick={() =>
+                                handleBranchChange(facility.facility_id)
+                              }
                             >
-                              <input 
-                                type="radio" 
-                                name="branch" 
-                                value={facility.facility_id} 
-                                checked={selectedBranch === facility.facility_id}
+                              <input
+                                type="radio"
+                                name="branch"
+                                value={facility.facility_id}
+                                checked={
+                                  selectedBranch === facility.facility_id
+                                }
                                 onChange={() => {}}
                               />
                               <div>
-                                <strong>🏥 {facility.facility_name || 'My Hub Cares'}</strong><br/>
-                                {facility.address && <small>{facility.address}</small>}
+                                <strong>
+                                  🏥 {facility.facility_name || 'My Hub Cares'}
+                                </strong>
+                                <br />
+                                {facility.address &&
+                                  typeof facility.address === 'object' && (
+                                    <small>
+                                      {facility.address.city},{' '}
+                                      {facility.address.province}
+                                    </small>
+                                  )}
                                 {facility.contact_number && (
                                   <>
-                                    <br/>
+                                    <br />
                                     <small>📞 {facility.contact_number}</small>
                                   </>
                                 )}
@@ -468,7 +618,9 @@ const PatientRegistration = () => {
                             </label>
                           ))}
                         </div>
-                        {errors.branch && <div className="error-message">{errors.branch}</div>}
+                        {errors.branch && (
+                          <div className="error-message">{errors.branch}</div>
+                        )}
                       </>
                     )}
                   </div>
@@ -479,103 +631,147 @@ const PatientRegistration = () => {
               {currentStep === 3 && (
                 <div className="registration-step active" data-step="3">
                   <div className="welcome-message">
-                    <strong>Create Your My Hub Cares Account</strong><br/>
-                    Use this account to book appointments, view prescriptions, and manage your health.
+                    <strong>Create Your My Hub Cares Account</strong>
+                    <br />
+                    Use this account to book appointments, view prescriptions,
+                    and manage your health.
                   </div>
 
                   <div className="form-section">
                     <h3>Account Credentials</h3>
-                    
+
                     <div className="form-group">
                       <label className="required">Username</label>
-                      <input 
-                        type="text" 
-                        id="username" 
+                      <input
+                        type="text"
+                        id="username"
                         name="username"
                         value={formData.username}
                         onChange={handleInputChange}
-                        required 
-                        placeholder="Choose a username" 
+                        required
+                        placeholder="Choose a username"
                         minLength="4"
                       />
-                      <small className="text-muted">At least 4 characters, no spaces</small>
-                      {errors.username && <div className="error-message">{errors.username}</div>}
+                      <small className="text-muted">
+                        At least 4 characters, no spaces
+                      </small>
+                      {errors.username && (
+                        <div className="error-message">{errors.username}</div>
+                      )}
                     </div>
 
                     <div className="form-group">
                       <label className="required">Password</label>
-                      <input 
-                        type="password" 
-                        id="password" 
+                      <input
+                        type="password"
+                        id="password"
                         name="password"
                         value={formData.password}
                         onChange={handleInputChange}
-                        required 
-                        placeholder="Create a strong password" 
+                        required
+                        placeholder="Create a strong password"
                         minLength="6"
                       />
-                      <small className="text-muted">At least 6 characters</small>
-                      {errors.password && <div className="error-message">{errors.password}</div>}
+                      <small className="text-muted">
+                        At least 6 characters
+                      </small>
+                      {errors.password && (
+                        <div className="error-message">{errors.password}</div>
+                      )}
                     </div>
 
                     <div className="form-group">
                       <label className="required">Confirm Password</label>
-                      <input 
-                        type="password" 
-                        id="confirmPassword" 
+                      <input
+                        type="password"
+                        id="confirmPassword"
                         name="confirmPassword"
                         value={formData.confirmPassword}
                         onChange={handleInputChange}
-                        required 
+                        required
                         placeholder="Re-enter password"
                       />
-                      {errors.confirmPassword && <div className="error-message">{errors.confirmPassword}</div>}
+                      {errors.confirmPassword && (
+                        <div className="error-message">
+                          {errors.confirmPassword}
+                        </div>
+                      )}
                     </div>
                   </div>
 
                   <div className="form-section">
                     <h3>Terms and Consent</h3>
-                    
+
                     <div className="form-group">
                       <label>
-                        <input 
-                          type="checkbox" 
-                          id="termsConsent" 
+                        <input
+                          type="checkbox"
+                          id="termsConsent"
                           name="termsConsent"
                           checked={formData.termsConsent}
                           onChange={handleInputChange}
                           required
                         />
-                        I agree to the <a href="#" onClick={(e) => { e.preventDefault(); showTerms(); }}>Terms and Conditions</a> and <a href="#" onClick={(e) => { e.preventDefault(); showPrivacy(); }}>Privacy Policy</a>
+                        I agree to the{' '}
+                        <a
+                          href="#"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            showTerms();
+                          }}
+                        >
+                          Terms and Conditions
+                        </a>{' '}
+                        and{' '}
+                        <a
+                          href="#"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            showPrivacy();
+                          }}
+                        >
+                          Privacy Policy
+                        </a>
                       </label>
-                      {errors.termsConsent && <div className="error-message">{errors.termsConsent}</div>}
+                      {errors.termsConsent && (
+                        <div className="error-message">
+                          {errors.termsConsent}
+                        </div>
+                      )}
                     </div>
 
                     <div className="form-group">
                       <label>
-                        <input 
-                          type="checkbox" 
-                          id="dataConsent" 
+                        <input
+                          type="checkbox"
+                          id="dataConsent"
                           name="dataConsent"
                           checked={formData.dataConsent}
                           onChange={handleInputChange}
                           required
                         />
-                        I consent to the collection and processing of my health information in accordance with the Data Privacy Act of 2012
+                        I consent to the collection and processing of my health
+                        information in accordance with the Data Privacy Act of
+                        2012
                       </label>
-                      {errors.dataConsent && <div className="error-message">{errors.dataConsent}</div>}
+                      {errors.dataConsent && (
+                        <div className="error-message">
+                          {errors.dataConsent}
+                        </div>
+                      )}
                     </div>
 
                     <div className="form-group">
                       <label>
-                        <input 
-                          type="checkbox" 
-                          id="smsConsent" 
+                        <input
+                          type="checkbox"
+                          id="smsConsent"
                           name="smsConsent"
                           checked={formData.smsConsent}
                           onChange={handleInputChange}
                         />
-                        I agree to receive appointment reminders and health updates via SMS and email
+                        I agree to receive appointment reminders and health
+                        updates via SMS and email
                       </label>
                     </div>
                   </div>
@@ -587,11 +783,16 @@ const PatientRegistration = () => {
                 <div className="registration-step active" data-step="4">
                   <div className="success-icon">✅</div>
                   <h2 className="text-center">Registration Successful!</h2>
-                  
+
                   <div className="welcome-message">
-                    <strong>Welcome to the My Hub Cares family!</strong><br/>
-                    Your account has been created successfully. You can now access your patient portal.<br/>
-                    <em style={{color: 'var(--primary-color)'}}>"It's my hub, and it's yours" - Welcome Home! 🏠</em>
+                    <strong>Welcome to the My Hub Cares family!</strong>
+                    <br />
+                    Your account has been created successfully. You can now
+                    access your patient portal.
+                    <br />
+                    <em style={{ color: 'var(--primary-color)' }}>
+                      "It's my hub, and it's yours" - Welcome Home! 🏠
+                    </em>
                   </div>
 
                   <div className="card mt-3">
@@ -603,18 +804,26 @@ const PatientRegistration = () => {
                       </div>
                       <div className="form-group">
                         <label>Username</label>
-                        <input type="text" value={confirmation.username} readOnly />
+                        <input
+                          type="text"
+                          value={confirmation.username}
+                          readOnly
+                        />
                       </div>
                       <div className="form-group">
                         <label>Preferred Branch</label>
-                        <input type="text" value={confirmation.branch} readOnly />
+                        <input
+                          type="text"
+                          value={confirmation.branch}
+                          readOnly
+                        />
                       </div>
                     </div>
                   </div>
 
                   <div className="alert alert-info mt-3">
                     <strong>Next Steps:</strong>
-                    <ul style={{margin: '10px 0 0 20px'}}>
+                    <ul style={{ margin: '10px 0 0 20px' }}>
                       <li>Log in to your patient portal</li>
                       <li>Complete your health profile</li>
                       <li>Book your first appointment</li>
@@ -623,7 +832,11 @@ const PatientRegistration = () => {
                   </div>
 
                   <div className="text-center mt-3">
-                    <button type="button" className="btn btn-primary btn-lg" onClick={() => window.location.href='/'}>
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-lg"
+                      onClick={() => (window.location.href = '/')}
+                    >
                       Go to Login
                     </button>
                   </div>
@@ -633,26 +846,44 @@ const PatientRegistration = () => {
               {/* Form Actions */}
               {currentStep < 4 && (
                 <div className="form-actions" id="formActions">
-                  <button 
-                    type="button" 
-                    className="btn btn-secondary" 
-                    id="prevBtn" 
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    id="prevBtn"
                     onClick={previousStep}
-                    style={{display: currentStep > 1 ? 'block' : 'none'}}
+                    style={{ display: currentStep > 1 ? 'block' : 'none' }}
                   >
                     ← Previous
                   </button>
-                  <button type="button" className="btn btn-outline" onClick={() => window.location.href='/'}>
+                  <button
+                    type="button"
+                    className="btn btn-outline"
+                    onClick={() => (window.location.href = '/')}
+                  >
                     Cancel
                   </button>
                   {currentStep < 3 && (
-                    <button type="button" className="btn btn-primary" id="nextBtn" onClick={nextStep}>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      id="nextBtn"
+                      onClick={nextStep}
+                    >
                       Next →
                     </button>
                   )}
                   {currentStep === 3 && (
-                    <button type="submit" className="btn btn-success" id="submitBtn">
-                      Complete Registration
+                    <button
+                      type="submit"
+                      className="btn btn-success"
+                      id="submitBtn"
+                      disabled={isLoading}
+                    >
+                      {isLoading ? (
+                        <span className="loading-spinner"></span>
+                      ) : (
+                        'Complete Registration'
+                      )}
                     </button>
                   )}
                 </div>
@@ -660,7 +891,9 @@ const PatientRegistration = () => {
             </form>
 
             <div className="text-center mt-3">
-              <p className="text-muted">Already have an account? <a href="/">Login here</a></p>
+              <p className="text-muted">
+                Already have an account? <a href="/">Login here</a>
+              </p>
             </div>
           </div>
         </div>

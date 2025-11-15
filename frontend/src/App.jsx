@@ -13,6 +13,15 @@ import Appointments from './components/Appointment.jsx';
 import ClinicalVisits from './components/ClinicalVisit.jsx';
 import Inventory from './components/Inventory.jsx';
 import Prescriptions from './components/Prescriptions.jsx';
+import ARTRegimenManagement from './components/ArtRegimentManagement.jsx';
+import VaccinationProgram from './components/VaccinationProgram.jsx';
+import LabTests from './components/LabTest.jsx';
+import HTSSessions from './components/HTSSessions.jsx';
+import Counseling from './components/Counseling.jsx';
+import Referrals from './components/Referrals.jsx';
+import Patients from './components/Patient.jsx';
+import BranchManagement from './components/BranchManagement.jsx';
+import Medications from './components/Medication.jsx';
 const socket = io('http://localhost:5000'); // global socket
 
 const theme = createTheme({
@@ -60,6 +69,14 @@ export default function App() {
             }
           />
           <Route
+            path="/patient"
+            element={
+              <MainLayout>
+                <Patients socket={socket} />
+              </MainLayout>
+            }
+          />
+          <Route
             path="/appointments"
             element={
               <MainLayout>
@@ -89,6 +106,75 @@ export default function App() {
             element={
               <MainLayout>
                 <Prescriptions socket={socket} />
+              </MainLayout>
+            }
+          />
+
+          <Route
+            path="/art-regimen"
+            element={
+              <MainLayout>
+                <ARTRegimenManagement socket={socket} />
+              </MainLayout>
+            }
+          />
+          <Route
+            path="/vaccination-program"
+            element={
+              <MainLayout>
+                <VaccinationProgram socket={socket} />
+              </MainLayout>
+            }
+          />
+
+          <Route
+            path="/lab-test"
+            element={
+              <MainLayout>
+                <LabTests socket={socket} />
+              </MainLayout>
+            }
+          />
+
+          <Route
+            path="/hts-sessions"
+            element={
+              <MainLayout>
+                <HTSSessions socket={socket} />
+              </MainLayout>
+            }
+          />
+          <Route
+            path="/counseling"
+            element={
+              <MainLayout>
+                <Counseling socket={socket} />
+              </MainLayout>
+            }
+          />
+          <Route
+            path="/referrals"
+            element={
+              <MainLayout>
+                <Referrals socket={socket} />
+              </MainLayout>
+            }
+          />
+
+          <Route
+            path="/branch-management"
+            element={
+              <MainLayout>
+                <BranchManagement socket={socket} />
+              </MainLayout>
+            }
+          />
+
+          <Route
+            path="/medications"
+            element={
+              <MainLayout>
+                <Medications socket={socket} />
               </MainLayout>
             }
           />

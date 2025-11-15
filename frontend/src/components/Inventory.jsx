@@ -1,68 +1,73 @@
-// web/src/pages/Inventory.jsx
 import React, { useState, useEffect } from 'react';
 import { X, Check, Plus, Search, Filter, AlertCircle } from 'lucide-react';
 
+const API_BASE_URL = 'http://localhost:5000/api';
+
 const Inventory = () => {
   const [inventory, setInventory] = useState([]);
+  const [medications, setMedications] = useState([]);
+  const [facilities, setFacilities] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState('all');
   const [showModal, setShowModal] = useState(false);
   const [selectedItem, setSelectedItem] = useState(null);
   const [modalMode, setModalMode] = useState('add');
   const [toast, setToast] = useState(null);
-
-  // Dummy inventory data matching the images
-  const dummyInventory = [
-    {
-      id: 1,
-      drugName: 'Tenofovir/Lamivudine/Dolutegravir (TLD)',
-      stockQuantity: 500,
-      unit: 'tablets',
-      expiryDate: '12/31/2026',
-      reorderLevel: 100,
-      supplier: 'MyHubCares Pharmacy',
-    },
-    {
-      id: 2,
-      drugName: 'Efavirenz 600mg',
-      stockQuantity: 250,
-      unit: 'tablets',
-      expiryDate: '06/15/2026',
-      reorderLevel: 100,
-      supplier: 'MyHubCares Pharmacy',
-    },
-    {
-      id: 3,
-      drugName: 'Atazanavir 300mg',
-      stockQuantity: 80,
-      unit: 'tablets',
-      expiryDate: '09/30/2025',
-      reorderLevel: 100,
-      supplier: 'MyHubCares Pharmacy',
-    },
-    {
-      id: 4,
-      drugName: 'Ritonavir 100mg',
-      stockQuantity: 150,
-      unit: 'tablets',
-      expiryDate: '03/15/2026',
-      reorderLevel: 100,
-      supplier: 'MyHubCares Pharmacy',
-    },
-    {
-      id: 5,
-      drugName: 'Cotrimoxazole 960mg',
-      stockQuantity: 800,
-      unit: 'tablets',
-      expiryDate: '11/30/2026',
-      reorderLevel: 200,
-      supplier: 'MyHubCares Pharmacy',
-    },
-  ];
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    setInventory(dummyInventory);
+    fetchInventory();
+    fetchMedications();
+    fetchFacilities();
   }, []);
+
+  const fetchInventory = async () => {
+    try {
+      setLoading(true);
+      const response = await fetch(`${API_BASE_URL}/inventory`);
+      const data = await response.json();
+
+      if (data.success) {
+        setInventory(data.data);
+      } else {
+        throw new Error(data.message);
+      }
+    } catch (error) {
+      console.error('Error fetching inventory:', error);
+      setToast({
+        message: 'Failed to fetch inventory: ' + error.message,
+        type: 'error',
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchMedications = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/medications`);
+      const data = await response.json();
+
+      if (data.success) {
+        setMedications(data.data);
+      }
+    } catch (error) {
+      console.error('Error fetching medications:', error);
+    }
+  };
+
+  const fetchFacilities = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/facilities`);
+      const data = await response.json();
+
+      if (data.success) {
+        setFacilities(data.data);
+      }
+    } catch (error) {
+      console.error('Error fetching facilities:', error);
+    }
+  };
 
   // Auto-hide toast after 3 seconds
   useEffect(() => {
@@ -92,54 +97,130 @@ const Inventory = () => {
     setShowModal(true);
   };
 
-  const handleAddItem = (itemData) => {
-    const newItem = {
-      id:
-        inventory.length > 0 ? Math.max(...inventory.map((i) => i.id)) + 1 : 1,
-      ...itemData,
-    };
-    setInventory([...inventory, newItem]);
-    setToast({
-      message: 'Inventory item added successfully',
-      type: 'success',
-    });
-    setShowModal(false);
-  };
-
-  const handleUpdateItem = (itemData) => {
-    const updatedInventory = inventory.map((item) =>
-      item.id === selectedItem.id ? { ...item, ...itemData } : item
-    );
-    setInventory(updatedInventory);
-    setToast({
-      message: 'Inventory item updated successfully',
-      type: 'success',
-    });
-    setShowModal(false);
-  };
-
-  const handleRestockItem = (quantity) => {
-    const updatedInventory = inventory.map((item) =>
-      item.id === selectedItem.id
-        ? { ...item, stockQuantity: item.stockQuantity + parseInt(quantity) }
-        : item
-    );
-    setInventory(updatedInventory);
-    setToast({
-      message: `Successfully added ${quantity} units to inventory`,
-      type: 'success',
-    });
-    setShowModal(false);
-  };
-
-  const handleDeleteItem = (itemId) => {
-    if (window.confirm('Are you sure you want to delete this item?')) {
-      const updatedInventory = inventory.filter((item) => item.id !== itemId);
-      setInventory(updatedInventory);
-      setToast({
-        message: 'Inventory item deleted successfully',
-        type: 'success',
+  const handleAddItem = async (itemData) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/inventory`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(itemData),
       });
+
+      const data = await response.json();
+
+      if (data.success) {
+        setToast({
+          message: 'Inventory item added successfully',
+          type: 'success',
+        });
+        setShowModal(false);
+        fetchInventory(); // Refresh the inventory list
+      } else {
+        throw new Error(data.message);
+      }
+    } catch (error) {
+      console.error('Error adding inventory item:', error);
+      setToast({
+        message: 'Failed to add inventory item: ' + error.message,
+        type: 'error',
+      });
+    }
+  };
+
+  const handleUpdateItem = async (itemData) => {
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/inventory/${selectedItem.inventory_id}`,
+        {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(itemData),
+        }
+      );
+
+      const data = await response.json();
+
+      if (data.success) {
+        setToast({
+          message: 'Inventory item updated successfully',
+          type: 'success',
+        });
+        setShowModal(false);
+        fetchInventory(); // Refresh the inventory list
+      } else {
+        throw new Error(data.message);
+      }
+    } catch (error) {
+      console.error('Error updating inventory item:', error);
+      setToast({
+        message: 'Failed to update inventory item: ' + error.message,
+        type: 'error',
+      });
+    }
+  };
+
+  const handleRestockItem = async (quantity) => {
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/inventory/${selectedItem.inventory_id}/restock`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ quantity }),
+        }
+      );
+
+      const data = await response.json();
+
+      if (data.success) {
+        setToast({
+          message: `Successfully added ${quantity} units to inventory`,
+          type: 'success',
+        });
+        setShowModal(false);
+        fetchInventory(); // Refresh the inventory list
+      } else {
+        throw new Error(data.message);
+      }
+    } catch (error) {
+      console.error('Error restocking inventory item:', error);
+      setToast({
+        message: 'Failed to restock inventory item: ' + error.message,
+        type: 'error',
+      });
+    }
+  };
+
+  const handleDeleteItem = async (itemId) => {
+    if (window.confirm('Are you sure you want to delete this item?')) {
+      try {
+        const response = await fetch(`${API_BASE_URL}/inventory/${itemId}`, {
+          method: 'DELETE',
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+          setToast({
+            message: 'Inventory item deleted successfully',
+            type: 'success',
+          });
+          fetchInventory(); // Refresh the inventory list
+        } else {
+          throw new Error(data.message);
+        }
+      } catch (error) {
+        console.error('Error deleting inventory item:', error);
+        setToast({
+          message: 'Failed to delete inventory item: ' + error.message,
+          type: 'error',
+        });
+      }
     }
   };
 
@@ -150,19 +231,21 @@ const Inventory = () => {
     if (searchTerm) {
       filtered = filtered.filter(
         (item) =>
-          item.drugName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          item.supplier.toLowerCase().includes(searchTerm.toLowerCase())
+          item.medication_name
+            .toLowerCase()
+            .includes(searchTerm.toLowerCase()) ||
+          item.facility_name.toLowerCase().includes(searchTerm.toLowerCase())
       );
     }
 
     // Apply type filter
     if (filterType === 'low') {
       filtered = filtered.filter(
-        (item) => item.stockQuantity <= item.reorderLevel
+        (item) => item.quantity_on_hand <= item.reorder_level
       );
     } else if (filterType === 'expiring') {
       filtered = filtered.filter((item) => {
-        const expiryDate = new Date(item.expiryDate);
+        const expiryDate = new Date(item.expiry_date);
         const monthsUntilExpiry =
           (expiryDate - new Date()) / (1000 * 60 * 60 * 24 * 30);
         return monthsUntilExpiry < 3;
@@ -175,6 +258,14 @@ const Inventory = () => {
   const renderInventoryGrid = () => {
     const filteredInventory = getFilteredInventory();
 
+    if (loading) {
+      return (
+        <p style={{ color: '#6c757d', textAlign: 'center', padding: '20px' }}>
+          Loading inventory...
+        </p>
+      );
+    }
+
     if (filteredInventory.length === 0) {
       return (
         <p style={{ color: '#6c757d', textAlign: 'center', padding: '20px' }}>
@@ -184,15 +275,15 @@ const Inventory = () => {
     }
 
     return filteredInventory.map((item) => {
-      const isLowStock = item.stockQuantity <= item.reorderLevel;
-      const expiryDate = new Date(item.expiryDate);
+      const isLowStock = item.quantity_on_hand <= item.reorder_level;
+      const expiryDate = new Date(item.expiry_date);
       const monthsUntilExpiry =
         (expiryDate - new Date()) / (1000 * 60 * 60 * 24 * 30);
       const isExpiringSoon = monthsUntilExpiry < 3;
 
       return (
         <div
-          key={item.id}
+          key={item.inventory_id}
           style={{
             background: 'white',
             padding: '20px',
@@ -211,7 +302,7 @@ const Inventory = () => {
             }}
           >
             <h3 style={{ margin: 0, color: '#333', fontSize: '16px' }}>
-              {item.drugName}
+              {item.medication_name}
             </h3>
             <div style={{ display: 'flex', gap: '5px' }}>
               {isLowStock && (
@@ -255,19 +346,26 @@ const Inventory = () => {
               marginBottom: '10px',
             }}
           >
-            {item.stockQuantity} {item.unit}
+            {item.quantity_on_hand} {item.unit}
           </div>
 
           <div
             style={{ fontSize: '14px', color: '#6c757d', marginBottom: '5px' }}
           >
-            <strong>Reorder Level:</strong> {item.reorderLevel} {item.unit}
+            <strong>Reorder Level:</strong> {item.reorder_level} {item.unit}
           </div>
 
           <div
             style={{ fontSize: '14px', color: '#6c757d', marginBottom: '5px' }}
           >
-            <strong>Expiry:</strong> {item.expiryDate}
+            <strong>Expiry:</strong>{' '}
+            {new Date(item.expiry_date).toLocaleDateString()}
+          </div>
+
+          <div
+            style={{ fontSize: '14px', color: '#6c757d', marginBottom: '5px' }}
+          >
+            <strong>Facility:</strong> {item.facility_name}
           </div>
 
           <div
@@ -306,7 +404,7 @@ const Inventory = () => {
               Restock
             </button>
             <button
-              onClick={() => handleDeleteItem(item.id)}
+              onClick={() => handleDeleteItem(item.inventory_id)}
               style={{
                 padding: '6px 12px',
                 background: '#dc3545',
@@ -436,6 +534,8 @@ const Inventory = () => {
         <InventoryModal
           mode={modalMode}
           item={selectedItem}
+          medications={medications}
+          facilities={facilities}
           onClose={() => setShowModal(false)}
           onAdd={handleAddItem}
           onUpdate={handleUpdateItem}
@@ -497,6 +597,8 @@ const Inventory = () => {
 const InventoryModal = ({
   mode,
   item,
+  medications,
+  facilities,
   onClose,
   onAdd,
   onUpdate,
@@ -504,12 +606,15 @@ const InventoryModal = ({
 }) => {
   const [formData, setFormData] = useState(
     item || {
-      drugName: '',
-      stockQuantity: '',
+      medication_id: '',
+      facility_id: '',
+      batch_number: '',
+      quantity_on_hand: '',
       unit: 'tablets',
-      expiryDate: '',
-      reorderLevel: '',
+      expiry_date: '',
+      reorder_level: '',
       supplier: '',
+      cost_per_unit: '',
     }
   );
 
@@ -595,11 +700,11 @@ const InventoryModal = ({
                   color: '#6c757d',
                 }}
               >
-                Drug Name
+                Medication Name
               </label>
               <input
                 type="text"
-                value={item.drugName}
+                value={item.medication_name}
                 readOnly
                 style={{
                   width: '100%',
@@ -624,7 +729,7 @@ const InventoryModal = ({
               </label>
               <input
                 type="text"
-                value={`${item.stockQuantity} ${item.unit}`}
+                value={`${item.quantity_on_hand} ${item.unit}`}
                 readOnly
                 style={{
                   width: '100%',
@@ -763,14 +868,75 @@ const InventoryModal = ({
                 fontWeight: 'bold',
               }}
             >
-              Drug Name <span style={{ color: 'red' }}>*</span>
+              Medication <span style={{ color: 'red' }}>*</span>
+            </label>
+            <select
+              name="medication_id"
+              value={formData.medication_id}
+              onChange={handleChange}
+              required
+              style={{
+                width: '100%',
+                padding: '8px',
+                border: '1px solid #ced4da',
+                borderRadius: '4px',
+              }}
+            >
+              <option value="">Select Medication</option>
+              {medications.map((med) => (
+                <option key={med.medication_id} value={med.medication_id}>
+                  {med.medication_name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div style={{ marginBottom: '15px' }}>
+            <label
+              style={{
+                display: 'block',
+                marginBottom: '5px',
+                fontWeight: 'bold',
+              }}
+            >
+              Facility <span style={{ color: 'red' }}>*</span>
+            </label>
+            <select
+              name="facility_id"
+              value={formData.facility_id}
+              onChange={handleChange}
+              required
+              style={{
+                width: '100%',
+                padding: '8px',
+                border: '1px solid #ced4da',
+                borderRadius: '4px',
+              }}
+            >
+              <option value="">Select Facility</option>
+              {facilities.map((facility) => (
+                <option key={facility.facility_id} value={facility.facility_id}>
+                  {facility.facility_name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div style={{ marginBottom: '15px' }}>
+            <label
+              style={{
+                display: 'block',
+                marginBottom: '5px',
+                fontWeight: 'bold',
+              }}
+            >
+              Batch Number
             </label>
             <input
               type="text"
-              name="drugName"
-              value={formData.drugName}
+              name="batch_number"
+              value={formData.batch_number}
               onChange={handleChange}
-              required
               style={{
                 width: '100%',
                 padding: '8px',
@@ -793,8 +959,8 @@ const InventoryModal = ({
               </label>
               <input
                 type="number"
-                name="stockQuantity"
-                value={formData.stockQuantity}
+                name="quantity_on_hand"
+                value={formData.quantity_on_hand}
                 onChange={handleChange}
                 required
                 min="0"
@@ -849,8 +1015,8 @@ const InventoryModal = ({
               </label>
               <input
                 type="date"
-                name="expiryDate"
-                value={formData.expiryDate}
+                name="expiry_date"
+                value={formData.expiry_date}
                 onChange={handleChange}
                 required
                 style={{
@@ -873,8 +1039,8 @@ const InventoryModal = ({
               </label>
               <input
                 type="number"
-                name="reorderLevel"
-                value={formData.reorderLevel}
+                name="reorder_level"
+                value={formData.reorder_level}
                 onChange={handleChange}
                 required
                 min="0"
@@ -888,29 +1054,56 @@ const InventoryModal = ({
             </div>
           </div>
 
-          <div style={{ marginBottom: '20px' }}>
-            <label
-              style={{
-                display: 'block',
-                marginBottom: '5px',
-                fontWeight: 'bold',
-              }}
-            >
-              Supplier <span style={{ color: 'red' }}>*</span>
-            </label>
-            <input
-              type="text"
-              name="supplier"
-              value={formData.supplier}
-              onChange={handleChange}
-              required
-              style={{
-                width: '100%',
-                padding: '8px',
-                border: '1px solid #ced4da',
-                borderRadius: '4px',
-              }}
-            />
+          <div style={{ display: 'flex', gap: '10px', marginBottom: '15px' }}>
+            <div style={{ flex: 1 }}>
+              <label
+                style={{
+                  display: 'block',
+                  marginBottom: '5px',
+                  fontWeight: 'bold',
+                }}
+              >
+                Supplier <span style={{ color: 'red' }}>*</span>
+              </label>
+              <input
+                type="text"
+                name="supplier"
+                value={formData.supplier}
+                onChange={handleChange}
+                required
+                style={{
+                  width: '100%',
+                  padding: '8px',
+                  border: '1px solid #ced4da',
+                  borderRadius: '4px',
+                }}
+              />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label
+                style={{
+                  display: 'block',
+                  marginBottom: '5px',
+                  fontWeight: 'bold',
+                }}
+              >
+                Cost per Unit
+              </label>
+              <input
+                type="number"
+                name="cost_per_unit"
+                value={formData.cost_per_unit}
+                onChange={handleChange}
+                step="0.01"
+                min="0"
+                style={{
+                  width: '100%',
+                  padding: '8px',
+                  border: '1px solid #ced4da',
+                  borderRadius: '4px',
+                }}
+              />
+            </div>
           </div>
 
           <div
