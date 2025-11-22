@@ -3,7 +3,7 @@ import { Settings as SettingsIcon, Users, Shield, Lock, Info, HelpCircle } from 
 import UserManagement from './UserManagement';
 import RolePermissionManagement from './RolePermissionManagement';
 import ChangePassword from './ChangePassword';
-import About from './About';
+import About from './About1';
 import FAQs from './FAQs';
 
 const API_BASE_URL = 'http://localhost:5000/api';
