@@ -143,11 +143,16 @@ const NotificationSystemStaff = ({ socket }) => {
                                         appointment_status: appointmentData.data.status
                                     };
                                 }
+                            } else if (appointmentResponse.status === 404) {
+                                // Appointment was deleted - this is expected, silently filter out
+                                return null;
+                            } else {
+                                // Other error status (500, etc.) - log but still filter out
+                                console.warn(`Error validating appointment ${notif.appointment_id}: HTTP ${appointmentResponse.status}`);
+                                return null;
                             }
-                            // Appointment doesn't exist, return null to filter out
-                            return null;
                         } catch (error) {
-                            // On error checking appointment, filter out to be safe
+                            // Network error or other exception - log but filter out to be safe
                             console.warn('Error validating appointment for notification:', error);
                             return null;
                         }
@@ -418,8 +423,11 @@ const NotificationSystemStaff = ({ socket }) => {
                     } else {
                         alert('Failed to load appointment details');
                     }
+                } else if (response.status === 404) {
+                    // Appointment was deleted - show user-friendly message
+                    alert('This appointment no longer exists. It may have been cancelled or deleted.');
                 } else {
-                    alert('Failed to load appointment details');
+                    alert('Failed to load appointment details. Please try again.');
                 }
             } catch (error) {
                 console.error('Error fetching appointment:', error);

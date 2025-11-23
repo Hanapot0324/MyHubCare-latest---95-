@@ -6,9 +6,13 @@ import {
   Lock,
   Info,
   HelpCircle,
+  // Cog, // Hidden for now
+  UserCheck,
 } from 'lucide-react';
 import UserManagement from './UserManagement';
 import RolePermissionManagement from './RolePermissionManagement';
+// import SystemSettings from './SystemSettings'; // Hidden for now
+import ClientTypes from './ClientTypes';
 import ChangePassword from './ChangePassword';
 import About from './About1';
 import FAQs from './FAQs';
@@ -165,6 +169,53 @@ const Settings = () => {
               <Shield size={18} />
               Roles & Permissions
             </button>
+            {/* System Settings tab - Hidden for now */}
+            {/* <button
+              onClick={() => setActiveTab('system-settings')}
+              style={{
+                padding: '16px 24px',
+                border: 'none',
+                background: 'transparent',
+                borderBottom:
+                  activeTab === 'system-settings'
+                    ? '3px solid #D84040'
+                    : '3px solid transparent',
+                color: activeTab === 'system-settings' ? '#D84040' : '#6c757d',
+                fontWeight: activeTab === 'system-settings' ? 600 : 400,
+                cursor: 'pointer',
+                fontSize: '16px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                transition: 'all 0.2s',
+              }}
+            >
+              <Cog size={18} />
+              System Settings
+            </button> */}
+            <button
+              onClick={() => setActiveTab('client-types')}
+              style={{
+                padding: '16px 24px',
+                border: 'none',
+                background: 'transparent',
+                borderBottom:
+                  activeTab === 'client-types'
+                    ? '3px solid #D84040'
+                    : '3px solid transparent',
+                color: activeTab === 'client-types' ? '#D84040' : '#6c757d',
+                fontWeight: activeTab === 'client-types' ? 600 : 400,
+                cursor: 'pointer',
+                fontSize: '16px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                transition: 'all 0.2s',
+              }}
+            >
+              <UserCheck size={18} />
+              Client Types
+            </button>
           </>
         )}
         <button
@@ -252,6 +303,10 @@ const Settings = () => {
           <UserManagement />
         ) : activeTab === 'roles' && !isPatient ? (
           <RolePermissionManagement />
+        ) : /* activeTab === 'system-settings' && !isPatient ? (
+          <SystemSettings />
+        ) : */ activeTab === 'client-types' && !isPatient ? (
+          <ClientTypes />
         ) : activeTab === 'password' ? (
           <ChangePassword />
         ) : activeTab === 'about' ? (

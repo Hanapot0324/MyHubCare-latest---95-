@@ -33,6 +33,10 @@ import counselingSessionsRoutes from './routes/counseling-sessions.js';
 import htsSessionsRoutes from './routes/hts-sessions.js';
 import careTasksRoutes from './routes/care-tasks.js';
 import reportsRoutes from './routes/reports.js';
+import systemSettingsRoutes from './routes/system-settings.js';
+import clientTypesRoutes from './routes/client-types.js';
+import userFacilityAssignmentsRoutes from './routes/user-facility-assignments.js';
+import auditLogsRoutes from './routes/audit-logs.js';
 import { processAppointmentReminders } from './services/reminderService.js';
 
 const app = express();
@@ -99,6 +103,10 @@ app.use('/api/counseling-sessions', counselingSessionsRoutes);
 app.use('/api/hts-sessions', htsSessionsRoutes);
 app.use('/api/care-tasks', careTasksRoutes);
 app.use('/api/reports', reportsRoutes);
+app.use('/api/system-settings', systemSettingsRoutes);
+app.use('/api/client-types', clientTypesRoutes);
+app.use('/api/user-facility-assignments', userFacilityAssignmentsRoutes);
+app.use('/api/audit-logs', auditLogsRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

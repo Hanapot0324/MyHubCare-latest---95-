@@ -124,12 +124,23 @@ const HTSSessions = () => {
 
       if (response.ok) {
         const data = await response.json();
+        console.log('Facilities API Response:', data);
         if (data.success) {
-          setFacilities(data.facilities || []);
+          // Handle both data.facilities and data.data formats
+          const facilitiesArray = data.data || data.facilities || [];
+          console.log('Loaded facilities:', facilitiesArray.length);
+          setFacilities(facilitiesArray);
+        } else {
+          console.error('API returned success=false for facilities:', data);
+          setFacilities([]);
         }
+      } else {
+        console.error('Failed to load facilities:', response.status);
+        setFacilities([]);
       }
     } catch (error) {
       console.error('Error loading facilities:', error);
+      setFacilities([]);
     }
   };
 
@@ -477,14 +488,22 @@ const HTSSessions = () => {
       alignItems: 'center',
       justifyContent: 'center',
       zIndex: 1000,
+      padding: '20px',
+      overflowY: 'auto',
+      overflowX: 'hidden',
     },
     modalContent: {
       backgroundColor: 'white',
       borderRadius: '8px',
       width: '90%',
       maxWidth: '600px',
-      maxHeight: '90vh',
-      overflowY: 'auto',
+      maxHeight: 'calc(100vh - 40px)',
+      display: 'flex',
+      flexDirection: 'column',
+      overflow: 'hidden',
+      position: 'relative',
+      margin: 'auto',
+      boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)',
     },
     modalHeader: {
       padding: '15px 20px',
@@ -492,6 +511,11 @@ const HTSSessions = () => {
       display: 'flex',
       justifyContent: 'space-between',
       alignItems: 'center',
+      flexShrink: 0,
+      backgroundColor: 'white',
+      position: 'sticky',
+      top: 0,
+      zIndex: 10,
     },
     modalTitle: {
       margin: 0,
@@ -499,13 +523,28 @@ const HTSSessions = () => {
       fontWeight: 'bold',
     },
     modalClose: {
-      background: 'none',
-      border: 'none',
-      fontSize: '20px',
+      background: '#f5f5f5',
+      border: '1px solid #ddd',
+      fontSize: '24px',
       cursor: 'pointer',
+      color: '#333',
+      fontWeight: 'bold',
+      padding: '0',
+      width: '36px',
+      height: '36px',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderRadius: '4px',
+      transition: 'all 0.2s',
+      lineHeight: '1',
     },
     modalBody: {
       padding: '20px',
+      overflowY: 'auto',
+      flex: 1,
+      minHeight: 0,
+      maxHeight: 'calc(90vh - 140px)', // Reserve space for header and footer
     },
     formGroup: {
       marginBottom: '15px',
@@ -563,23 +602,32 @@ const HTSSessions = () => {
       display: 'flex',
       justifyContent: 'flex-end',
       gap: '10px',
+      flexShrink: 0,
+      backgroundColor: 'white',
+      position: 'sticky',
+      bottom: 0,
+      zIndex: 10,
     },
     cancelButton: {
-      padding: '8px 16px',
+      padding: '10px 20px',
       border: '1px solid #ddd',
       backgroundColor: 'white',
       borderRadius: '4px',
       fontSize: '14px',
       cursor: 'pointer',
+      fontWeight: '500',
+      minWidth: '80px',
     },
     saveButton: {
-      padding: '8px 16px',
+      padding: '10px 20px',
       border: 'none',
       backgroundColor: '#007bff',
       color: 'white',
       borderRadius: '4px',
       fontSize: '14px',
       cursor: 'pointer',
+      fontWeight: '500',
+      minWidth: '100px',
     },
     detailsGroup: {
       marginBottom: '15px',
@@ -785,6 +833,13 @@ const HTSSessions = () => {
               <button
                 style={styles.modalClose}
                 onClick={() => setShowModal(false)}
+                onMouseEnter={(e) => {
+                  e.target.style.backgroundColor = '#f0f0f0';
+                }}
+                onMouseLeave={(e) => {
+                  e.target.style.backgroundColor = 'transparent';
+                }}
+                title="Close"
               >
                 &times;
               </button>
@@ -872,31 +927,30 @@ const HTSSessions = () => {
                         {f.facility_name || f.name}
                       </option>
                     ))}
-                    <option value="">My Hub Cares Ortigas Main</option>
-                    {facilities.map((f) => (
+                  </select>
+                </div>
+                <div style={styles.formGroup}>
+                  <label style={styles.label} htmlFor="tester_id">
+                    Tester/Counselor <span style={{ color: 'red' }}>*</span>
+                  </label>
+                  <select
+                    id="tester_id"
+                    name="tester_id"
+                    value={newSession.tester_id}
+                    onChange={handleInputChange}
+                    style={styles.select}
+                    required
+                  >
+                    <option value="">Select Tester/Counselor</option>
+                    {physicians.map((p) => (
                       <option
-                        key={f.facility_id || f.id}
-                        value={f.facility_id || f.id}
+                        key={p.user_id || p.id}
+                        value={p.user_id || p.id}
                       >
-                        {f.facility_name || f.name}
-                      </option>
-                    ))}
-                    <option value="">My Hub Cares Pasay</option>
-                    {facilities.map((f) => (
-                      <option
-                        key={f.facility_id || f.id}
-                        value={f.facility_id || f.id}
-                      >
-                        {f.facility_name || f.name}
-                      </option>
-                    ))}
-                    <option value="">My Hub Cares Alabang</option>
-                    {facilities.map((f) => (
-                      <option
-                        key={f.facility_id || f.id}
-                        value={f.facility_id || f.id}
-                      >
-                        {f.facility_name || f.name}
+                        {p.full_name ||
+                          `${p.first_name || ''} ${p.last_name || ''}`.trim() ||
+                          p.name ||
+                          'N/A'}
                       </option>
                     ))}
                   </select>
@@ -1024,21 +1078,6 @@ const HTSSessions = () => {
                 )}
 
                 <div style={styles.formGroup}>
-                  <label style={styles.label} htmlFor="referral_destination">
-                    Referral Destination
-                  </label>
-                  <input
-                    type="text"
-                    id="referral_destination"
-                    name="referral_destination"
-                    value={newSession.referral_destination}
-                    onChange={handleInputChange}
-                    placeholder="e.g., ART Clinic"
-                    style={styles.input}
-                  />
-                </div>
-
-                <div style={styles.formGroup}>
                   <label style={styles.label} htmlFor="remarks">
                     Remarks
                   </label>
@@ -1078,6 +1117,13 @@ const HTSSessions = () => {
               <button
                 style={styles.modalClose}
                 onClick={() => setShowDetailsModal(false)}
+                onMouseEnter={(e) => {
+                  e.target.style.backgroundColor = '#f0f0f0';
+                }}
+                onMouseLeave={(e) => {
+                  e.target.style.backgroundColor = 'transparent';
+                }}
+                title="Close"
               >
                 &times;
               </button>
@@ -1242,6 +1288,15 @@ const HTSSessions = () => {
                 }
                 return null;
               })()}
+            </div>
+            <div style={styles.modalFooter}>
+              <button
+                type="button"
+                style={styles.cancelButton}
+                onClick={() => setShowDetailsModal(false)}
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>

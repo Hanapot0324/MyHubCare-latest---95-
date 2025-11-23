@@ -465,12 +465,8 @@ const AuditTrail = ({ socket }) => {
                 <MenuItem value="reminders">Reminders</MenuItem>
                 <MenuItem value="surveys">Surveys</MenuItem>
                 <MenuItem value="forum">Forum</MenuItem>
-                {isAdmin && (
-                  <>
-                    <MenuItem value="users">Users</MenuItem>
-                    <MenuItem value="facilities">Facilities</MenuItem>
-                  </>
-                )}
+                {isAdmin && <MenuItem value="users">Users</MenuItem>}
+                {isAdmin && <MenuItem value="facilities">Facilities</MenuItem>}
                 <MenuItem value="system">System</MenuItem>
                 <MenuItem value="mobile-app">Mobile App</MenuItem>
                 <MenuItem value="reports">Reports</MenuItem>

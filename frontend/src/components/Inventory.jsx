@@ -15,9 +15,6 @@ const Inventory = () => {
   const [toast, setToast] = useState(null);
   const [loading, setLoading] = useState(true);
   const [medications, setMedications] = useState([]);
-  const [showMedicationModal, setShowMedicationModal] = useState(false);
-  const [editingMedication, setEditingMedication] = useState(null);
-  const [activeTab, setActiveTab] = useState('inventory'); // 'inventory' or 'medications'
 
   useEffect(() => {
     fetchInventory();
@@ -215,114 +212,6 @@ const Inventory = () => {
     }
   };
 
-  // Medication CRUD handlers
-  const handleShowAddMedicationModal = () => {
-    setEditingMedication(null);
-    setShowMedicationModal(true);
-  };
-
-  const handleEditMedication = (medication) => {
-    setEditingMedication(medication);
-    setShowMedicationModal(true);
-  };
-
-  const handleAddMedication = async (medicationData) => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/medications`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(medicationData),
-      });
-
-      const data = await response.json();
-
-      if (data.success) {
-        setToast({
-          message: 'Medication added successfully',
-          type: 'success',
-        });
-        setShowMedicationModal(false);
-        setEditingMedication(null);
-        fetchMedications();
-      } else {
-        throw new Error(data.message);
-      }
-    } catch (error) {
-      console.error('Error adding medication:', error);
-      setToast({
-        message: 'Failed to add medication: ' + error.message,
-        type: 'error',
-      });
-    }
-  };
-
-  const handleUpdateMedication = async (medicationData) => {
-    try {
-      const response = await fetch(
-        `${API_BASE_URL}/medications/${editingMedication.medication_id}`,
-        {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(medicationData),
-        }
-      );
-
-      const data = await response.json();
-
-      if (data.success) {
-        setToast({
-          message: 'Medication updated successfully',
-          type: 'success',
-        });
-        setShowMedicationModal(false);
-        setEditingMedication(null);
-        fetchMedications();
-      } else {
-        throw new Error(data.message);
-      }
-    } catch (error) {
-      console.error('Error updating medication:', error);
-      setToast({
-        message: 'Failed to update medication: ' + error.message,
-        type: 'error',
-      });
-    }
-  };
-
-  const handleDeleteMedication = async (medicationId) => {
-    if (window.confirm('Are you sure you want to delete this medication?')) {
-      try {
-        const response = await fetch(
-          `${API_BASE_URL}/medications/${medicationId}`,
-          {
-            method: 'DELETE',
-          }
-        );
-
-        const data = await response.json();
-
-        if (data.success) {
-          setToast({
-            message: data.message || 'Medication deleted successfully',
-            type: 'success',
-          });
-          fetchMedications();
-        } else {
-          throw new Error(data.message);
-        }
-      } catch (error) {
-        console.error('Error deleting medication:', error);
-        setToast({
-          message: 'Failed to delete medication: ' + error.message,
-          type: 'error',
-        });
-      }
-    }
-  };
 
   const getFilteredInventory = () => {
     let filtered = inventory;
@@ -547,443 +436,101 @@ const Inventory = () => {
             <p style={{ margin: 0, color: '#F8F2DE', fontSize: '16px' }}>Manage medication stock and supplies</p>
           </div>
           <div style={{ display: 'flex', gap: '10px' }}>
-            {activeTab === 'inventory' ? (
-              <button
-                onClick={handleShowAddItemModal}
-                style={{
-                  padding: '10px 16px',
-                  background: '#ECDCBF',
-                  color: '#A31D1D',
-                  border: 'none',
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                  transition: 'all 0.2s ease',
-                  fontWeight: '500',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '5px'
-                }}
-                onMouseEnter={(e) => {
-                  e.target.style.background = '#F8F2DE';
-                  e.target.style.transform = 'translateY(-1px)';
-                }}
-                onMouseLeave={(e) => {
-                  e.target.style.background = '#ECDCBF';
-                  e.target.style.transform = 'translateY(0)';
-                }}
-              >
-                <Plus size={16} />
-                Add New Item
-              </button>
-            ) : (
-              <button
-                onClick={handleShowAddMedicationModal}
-                style={{
-                  padding: '10px 16px',
-                  background: '#ECDCBF',
-                  color: '#A31D1D',
-                  border: 'none',
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                  transition: 'all 0.2s ease',
-                  fontWeight: '500',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '5px'
-                }}
-                onMouseEnter={(e) => {
-                  e.target.style.background = '#F8F2DE';
-                  e.target.style.transform = 'translateY(-1px)';
-                }}
-                onMouseLeave={(e) => {
-                  e.target.style.background = '#ECDCBF';
-                  e.target.style.transform = 'translateY(0)';
-                }}
-              >
-                <Plus size={16} />
-                Add Medication
-              </button>
-            )}
+            <button
+              onClick={handleShowAddItemModal}
+              style={{
+                padding: '10px 16px',
+                background: '#ECDCBF',
+                color: '#A31D1D',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease',
+                fontWeight: '500',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '5px'
+              }}
+              onMouseEnter={(e) => {
+                e.target.style.background = '#F8F2DE';
+                e.target.style.transform = 'translateY(-1px)';
+              }}
+              onMouseLeave={(e) => {
+                e.target.style.background = '#ECDCBF';
+                e.target.style.transform = 'translateY(0)';
+              }}
+            >
+              <Plus size={16} />
+              Add New Item
+            </button>
           </div>
         </div>
       </div>
 
-      {/* Tabs */}
-      <div
-        style={{
-          display: 'flex',
-          gap: '10px',
-          marginBottom: '20px',
-          borderBottom: '2px solid #e9ecef',
-        }}
-      >
-        <button
-          onClick={() => setActiveTab('inventory')}
-          style={{
-            padding: '10px 20px',
-            background: 'none',
-            border: 'none',
-            borderBottom:
-              activeTab === 'inventory' ? '3px solid #A31D1D' : '3px solid transparent',
-            color: activeTab === 'inventory' ? '#A31D1D' : '#6c757d',
-            fontWeight: activeTab === 'inventory' ? 'bold' : 'normal',
-            cursor: 'pointer',
-            fontSize: '14px',
-          }}
-        >
-          Inventory
-        </button>
-        <button
-          onClick={() => setActiveTab('medications')}
-          style={{
-            padding: '10px 20px',
-            background: 'none',
-            border: 'none',
-            borderBottom:
-              activeTab === 'medications'
-                ? '3px solid #A31D1D'
-                : '3px solid transparent',
-            color: activeTab === 'medications' ? '#A31D1D' : '#6c757d',
-            fontWeight: activeTab === 'medications' ? 'bold' : 'normal',
-            cursor: 'pointer',
-            fontSize: '14px',
-          }}
-        >
-          Medications
-        </button>
+      {/* Search and Filter */}
+      <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
+        <div style={{ position: 'relative', flex: 1 }}>
+          <Search
+            size={18}
+            color="#6c757d"
+            style={{
+              position: 'absolute',
+              left: '10px',
+              top: '50%',
+              transform: 'translateY(-50%)',
+            }}
+          />
+          <input
+            type="text"
+            placeholder="Search inventory..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            style={{
+              padding: '8px 12px 8px 36px',
+              border: '1px solid #ced4da',
+              borderRadius: '4px',
+              width: '100%',
+            }}
+          />
+        </div>
+        <div style={{ position: 'relative' }}>
+          <Filter
+            size={18}
+            color="#6c757d"
+            style={{
+              position: 'absolute',
+              left: '10px',
+              top: '50%',
+              transform: 'translateY(-50%)',
+            }}
+          />
+          <select
+            value={filterType}
+            onChange={(e) => setFilterType(e.target.value)}
+            style={{
+              padding: '8px 12px 8px 36px',
+              border: '1px solid #ced4da',
+              borderRadius: '4px',
+              appearance: 'none',
+            }}
+          >
+            <option value="all">All Items</option>
+            <option value="low">Low Stock</option>
+            <option value="expiring">Expiring Soon</option>
+          </select>
+        </div>
       </div>
 
-      {activeTab === 'inventory' ? (
-        <>
-          {/* Search and Filter */}
-          <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
-            <div style={{ position: 'relative', flex: 1 }}>
-              <Search
-                size={18}
-                color="#6c757d"
-                style={{
-                  position: 'absolute',
-                  left: '10px',
-                  top: '50%',
-                  transform: 'translateY(-50%)',
-                }}
-              />
-              <input
-                type="text"
-                placeholder="Search inventory..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                style={{
-                  padding: '8px 12px 8px 36px',
-                  border: '1px solid #ced4da',
-                  borderRadius: '4px',
-                  width: '100%',
-                }}
-              />
-            </div>
-            <div style={{ position: 'relative' }}>
-              <Filter
-                size={18}
-                color="#6c757d"
-                style={{
-                  position: 'absolute',
-                  left: '10px',
-                  top: '50%',
-                  transform: 'translateY(-50%)',
-                }}
-              />
-              <select
-                value={filterType}
-                onChange={(e) => setFilterType(e.target.value)}
-                style={{
-                  padding: '8px 12px 8px 36px',
-                  border: '1px solid #ced4da',
-                  borderRadius: '4px',
-                  appearance: 'none',
-                }}
-              >
-                <option value="all">All Items</option>
-                <option value="low">Low Stock</option>
-                <option value="expiring">Expiring Soon</option>
-              </select>
-            </div>
-          </div>
-
-          {/* Inventory Grid */}
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fill, minmax(400px, 1fr))',
-              gap: '20px',
-            }}
-          >
-            {renderInventoryGrid()}
-          </div>
-        </>
-      ) : (
-        <>
-          {/* Medications Table */}
-          <div
-            style={{
-              background: 'white',
-              borderRadius: '8px',
-              overflow: 'hidden',
-              boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-            }}
-          >
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ background: '#f8f9fa', borderBottom: '2px solid #dee2e6' }}>
-                  <th
-                    style={{
-                      padding: '12px',
-                      textAlign: 'left',
-                      fontWeight: 'bold',
-                      color: '#333',
-                      fontSize: '14px',
-                    }}
-                  >
-                    Medication Name
-                  </th>
-                  <th
-                    style={{
-                      padding: '12px',
-                      textAlign: 'left',
-                      fontWeight: 'bold',
-                      color: '#333',
-                      fontSize: '14px',
-                    }}
-                  >
-                    Generic Name
-                  </th>
-                  <th
-                    style={{
-                      padding: '12px',
-                      textAlign: 'left',
-                      fontWeight: 'bold',
-                      color: '#333',
-                      fontSize: '14px',
-                    }}
-                  >
-                    Form
-                  </th>
-                  <th
-                    style={{
-                      padding: '12px',
-                      textAlign: 'left',
-                      fontWeight: 'bold',
-                      color: '#333',
-                      fontSize: '14px',
-                    }}
-                  >
-                    Strength
-                  </th>
-                  <th
-                    style={{
-                      padding: '12px',
-                      textAlign: 'left',
-                      fontWeight: 'bold',
-                      color: '#333',
-                      fontSize: '14px',
-                    }}
-                  >
-                    ATC Code
-                  </th>
-                  <th
-                    style={{
-                      padding: '12px',
-                      textAlign: 'left',
-                      fontWeight: 'bold',
-                      color: '#333',
-                      fontSize: '14px',
-                    }}
-                  >
-                    ART
-                  </th>
-                  <th
-                    style={{
-                      padding: '12px',
-                      textAlign: 'left',
-                      fontWeight: 'bold',
-                      color: '#333',
-                      fontSize: '14px',
-                    }}
-                  >
-                    Controlled
-                  </th>
-                  <th
-                    style={{
-                      padding: '12px',
-                      textAlign: 'left',
-                      fontWeight: 'bold',
-                      color: '#333',
-                      fontSize: '14px',
-                    }}
-                  >
-                    Status
-                  </th>
-                  <th
-                    style={{
-                      padding: '12px',
-                      textAlign: 'center',
-                      fontWeight: 'bold',
-                      color: '#333',
-                      fontSize: '14px',
-                    }}
-                  >
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {medications.length === 0 ? (
-                  <tr>
-                    <td
-                      colSpan="9"
-                      style={{
-                        padding: '20px',
-                        textAlign: 'center',
-                        color: '#6c757d',
-                      }}
-                    >
-                      No medications found
-                    </td>
-                  </tr>
-                ) : (
-                  medications.map((med) => (
-                    <tr
-                      key={med.medication_id}
-                      style={{
-                        borderBottom: '1px solid #dee2e6',
-                        '&:hover': { background: '#f8f9fa' },
-                      }}
-                    >
-                      <td style={{ padding: '12px', fontSize: '14px' }}>
-                        {med.medication_name}
-                      </td>
-                      <td style={{ padding: '12px', fontSize: '14px', color: '#6c757d' }}>
-                        {med.generic_name || '-'}
-                      </td>
-                      <td style={{ padding: '12px', fontSize: '14px' }}>
-                        {med.form}
-                      </td>
-                      <td style={{ padding: '12px', fontSize: '14px' }}>
-                        {med.strength || '-'}
-                      </td>
-                      <td style={{ padding: '12px', fontSize: '14px' }}>
-                        {med.atc_code || '-'}
-                      </td>
-                      <td style={{ padding: '12px', fontSize: '14px' }}>
-                        {med.is_art ? (
-                          <span
-                            style={{
-                              background: '#28a745',
-                              color: 'white',
-                              padding: '4px 8px',
-                              borderRadius: '4px',
-                              fontSize: '12px',
-                            }}
-                          >
-                            Yes
-                          </span>
-                        ) : (
-                          <span style={{ color: '#6c757d' }}>No</span>
-                        )}
-                      </td>
-                      <td style={{ padding: '12px', fontSize: '14px' }}>
-                        {med.is_controlled ? (
-                          <span
-                            style={{
-                              background: '#dc3545',
-                              color: 'white',
-                              padding: '4px 8px',
-                              borderRadius: '4px',
-                              fontSize: '12px',
-                            }}
-                          >
-                            Yes
-                          </span>
-                        ) : (
-                          <span style={{ color: '#6c757d' }}>No</span>
-                        )}
-                      </td>
-                      <td style={{ padding: '12px', fontSize: '14px' }}>
-                        {med.active ? (
-                          <span
-                            style={{
-                              background: '#28a745',
-                              color: 'white',
-                              padding: '4px 8px',
-                              borderRadius: '4px',
-                              fontSize: '12px',
-                            }}
-                          >
-                            Active
-                          </span>
-                        ) : (
-                          <span
-                            style={{
-                              background: '#6c757d',
-                              color: 'white',
-                              padding: '4px 8px',
-                              borderRadius: '4px',
-                              fontSize: '12px',
-                            }}
-                          >
-                            Inactive
-                          </span>
-                        )}
-                      </td>
-                      <td
-                        style={{
-                          padding: '12px',
-                          fontSize: '14px',
-                          display: 'flex',
-                          gap: '8px',
-                          justifyContent: 'center',
-                        }}
-                      >
-                        <button
-                          onClick={() => handleEditMedication(med)}
-                          style={{
-                            padding: '4px 8px',
-                            background: '#28a745',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '4px',
-                            cursor: 'pointer',
-                            fontSize: '12px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '4px',
-                          }}
-                        >
-                          <Edit size={12} />
-                          Edit
-                        </button>
-                        <button
-                          onClick={() => handleDeleteMedication(med.medication_id)}
-                          style={{
-                            padding: '4px 8px',
-                            background: '#dc3545',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '4px',
-                            cursor: 'pointer',
-                            fontSize: '12px',
-                          }}
-                        >
-                          Delete
-                        </button>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </>
-      )}
+      {/* Inventory Grid */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(400px, 1fr))',
+          gap: '20px',
+        }}
+      >
+        {renderInventoryGrid()}
+      </div>
 
       {/* Edit Item Modal */}
       {showEditModal && editingItem && (
@@ -1723,306 +1270,6 @@ const Inventory = () => {
                   }}
                 >
                   Add Item
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Medication Modal */}
-      {showMedicationModal && (
-        <div
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: 'rgba(0,0,0,0.5)',
-            display: 'flex',
-            justifyContent: 'center',
-            alignItems: 'center',
-            zIndex: 1000,
-          }}
-        >
-          <div
-            style={{
-              background: 'white',
-              padding: '30px',
-              borderRadius: '8px',
-              width: '90%',
-              maxWidth: '600px',
-              maxHeight: 'calc(100vh - 104px)',
-              overflow: 'auto',
-              boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
-            }}
-          >
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                marginBottom: '20px',
-              }}
-            >
-              <h2 style={{ margin: 0 }}>
-                {editingMedication ? 'Edit Medication' : 'Add Medication'}
-              </h2>
-              <button
-                onClick={() => {
-                  setShowMedicationModal(false);
-                  setEditingMedication(null);
-                }}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  cursor: 'pointer',
-                  padding: '5px',
-                  borderRadius: '4px',
-                }}
-              >
-                <X size={24} color="#6c757d" />
-              </button>
-            </div>
-
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                const formData = new FormData(e.target);
-                const medicationData = {
-                  medication_name: formData.get('medication_name'),
-                  generic_name: formData.get('generic_name') || null,
-                  form: formData.get('form'),
-                  strength: formData.get('strength') || null,
-                  atc_code: formData.get('atc_code') || null,
-                  is_art: formData.get('is_art') === 'true',
-                  is_controlled: formData.get('is_controlled') === 'true',
-                  active: formData.get('active') !== 'false',
-                };
-
-                if (editingMedication) {
-                  handleUpdateMedication(medicationData);
-                } else {
-                  handleAddMedication(medicationData);
-                }
-              }}
-            >
-              <div style={{ marginBottom: '15px' }}>
-                <label
-                  style={{
-                    display: 'block',
-                    marginBottom: '5px',
-                    fontWeight: 'bold',
-                  }}
-                >
-                  Medication Name <span style={{ color: 'red' }}>*</span>
-                </label>
-                <input
-                  type="text"
-                  name="medication_name"
-                  required
-                  defaultValue={editingMedication?.medication_name || ''}
-                  style={{
-                    width: '100%',
-                    padding: '8px',
-                    border: '1px solid #ced4da',
-                    borderRadius: '4px',
-                  }}
-                />
-              </div>
-
-              <div style={{ marginBottom: '15px' }}>
-                <label
-                  style={{
-                    display: 'block',
-                    marginBottom: '5px',
-                    fontWeight: 'bold',
-                  }}
-                >
-                  Generic Name
-                </label>
-                <input
-                  type="text"
-                  name="generic_name"
-                  defaultValue={editingMedication?.generic_name || ''}
-                  style={{
-                    width: '100%',
-                    padding: '8px',
-                    border: '1px solid #ced4da',
-                    borderRadius: '4px',
-                  }}
-                />
-              </div>
-
-              <div style={{ display: 'flex', gap: '10px', marginBottom: '15px' }}>
-                <div style={{ flex: 1 }}>
-                  <label
-                    style={{
-                      display: 'block',
-                      marginBottom: '5px',
-                      fontWeight: 'bold',
-                    }}
-                  >
-                    Form <span style={{ color: 'red' }}>*</span>
-                  </label>
-                  <select
-                    name="form"
-                    required
-                    defaultValue={editingMedication?.form || ''}
-                    style={{
-                      width: '100%',
-                      padding: '8px',
-                      border: '1px solid #ced4da',
-                      borderRadius: '4px',
-                    }}
-                  >
-                    <option value="">Select form</option>
-                    <option value="tablet">Tablet</option>
-                    <option value="capsule">Capsule</option>
-                    <option value="syrup">Syrup</option>
-                    <option value="injection">Injection</option>
-                    <option value="cream">Cream</option>
-                    <option value="other">Other</option>
-                  </select>
-                </div>
-                <div style={{ flex: 1 }}>
-                  <label
-                    style={{
-                      display: 'block',
-                      marginBottom: '5px',
-                      fontWeight: 'bold',
-                    }}
-                  >
-                    Strength
-                  </label>
-                  <input
-                    type="text"
-                    name="strength"
-                    defaultValue={editingMedication?.strength || ''}
-                    placeholder="e.g., 500mg"
-                    style={{
-                      width: '100%',
-                      padding: '8px',
-                      border: '1px solid #ced4da',
-                      borderRadius: '4px',
-                    }}
-                  />
-                </div>
-              </div>
-
-              <div style={{ marginBottom: '15px' }}>
-                <label
-                  style={{
-                    display: 'block',
-                    marginBottom: '5px',
-                    fontWeight: 'bold',
-                  }}
-                >
-                  ATC Code
-                </label>
-                <input
-                  type="text"
-                  name="atc_code"
-                  defaultValue={editingMedication?.atc_code || ''}
-                  maxLength="10"
-                  style={{
-                    width: '100%',
-                    padding: '8px',
-                    border: '1px solid #ced4da',
-                    borderRadius: '4px',
-                  }}
-                />
-              </div>
-
-              <div style={{ display: 'flex', gap: '20px', marginBottom: '15px' }}>
-                <label
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    name="is_art"
-                    value="true"
-                    defaultChecked={editingMedication?.is_art || false}
-                    style={{ cursor: 'pointer' }}
-                  />
-                  <span style={{ fontWeight: 'bold' }}>ART Medication</span>
-                </label>
-                <label
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    name="is_controlled"
-                    value="true"
-                    defaultChecked={editingMedication?.is_controlled || false}
-                    style={{ cursor: 'pointer' }}
-                  />
-                  <span style={{ fontWeight: 'bold' }}>Controlled Substance</span>
-                </label>
-                <label
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    name="active"
-                    value="true"
-                    defaultChecked={
-                      editingMedication ? editingMedication.active !== false : true
-                    }
-                    style={{ cursor: 'pointer' }}
-                  />
-                  <span style={{ fontWeight: 'bold' }}>Active</span>
-                </label>
-              </div>
-
-              <div
-                style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}
-              >
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowMedicationModal(false);
-                    setEditingMedication(null);
-                  }}
-                  style={{
-                    padding: '8px 16px',
-                    background: '#6c757d',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  style={{
-                    padding: '8px 16px',
-                    background: '#28a745',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  {editingMedication ? 'Update Medication' : 'Add Medication'}
                 </button>
               </div>
             </form>

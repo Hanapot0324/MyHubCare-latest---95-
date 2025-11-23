@@ -105,9 +105,14 @@ const NotificationSystemPatient = ({ socket }) => {
                                 if (appointmentData.success && appointmentData.data) {
                                     return notif; // Appointment exists, include notification
                                 }
+                            } else if (appointmentResponse.status === 404) {
+                                // Appointment was deleted - this is expected, silently filter out
+                                return null;
+                            } else {
+                                // Other error status (500, etc.) - log but still filter out
+                                console.warn(`Error validating appointment ${notif.appointment_id}: HTTP ${appointmentResponse.status}`);
+                                return null;
                             }
-                            // Appointment doesn't exist, return null to filter out
-                            return null;
                         } catch (error) {
                             // On error checking appointment, filter out to be safe
                             console.warn('Error validating appointment for notification:', error);

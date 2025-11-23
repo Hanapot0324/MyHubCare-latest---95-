@@ -960,49 +960,84 @@ This document provides a comprehensive breakdown of the database structure per m
 
 ## MODULE 9: SYSTEM ADMINISTRATION (P9)
 
-### **Purpose**: Manages users, facilities, system settings, and configuration.
+### **Purpose**: Manages users, facilities, system settings, regions, client types, and configuration. Provides administrative control over the entire system.
 
 ### **Database Tables**:
 
 #### **9.1. facilities**
 | Column Name | Data Type | Constraints | Required | Description |
 |------------|-----------|-------------|----------|-------------|
-| facility_id | UUID | PRIMARY KEY | Yes | Unique facility identifier |
+| facility_id | UUID (CHAR(36)) | PRIMARY KEY | Yes | Unique facility identifier |
 | facility_name | VARCHAR(150) | NOT NULL | Yes | Facility name |
 | facility_type | ENUM('main', 'branch', 'satellite', 'external') | NOT NULL | Yes | Facility type |
-| address | JSONB | NOT NULL | Yes | Full address (street, city, province, zip) |
-| region_id | INTEGER | | No | Region ID |
+| address | JSONB (LONGTEXT) | NOT NULL, CHECK (json_valid) | Yes | Full address (street, city, province, zip) |
+| region_id | INTEGER | FOREIGN KEY → regions(region_id) | No | Region ID |
 | contact_person | VARCHAR(200) | | No | Contact person name |
 | contact_number | VARCHAR(50) | | No | Contact phone |
 | email | VARCHAR(255) | | No | Contact email |
-| is_active | BOOLEAN | DEFAULT true | Yes | Active facility flag |
-| created_at | TIMESTAMPTZ | DEFAULT NOW() | Yes | Creation timestamp |
-| updated_at | TIMESTAMPTZ | DEFAULT NOW() | Yes | Last update |
+| is_active | BOOLEAN (TINYINT(1)) | DEFAULT 1 | Yes | Active facility flag |
+| created_at | TIMESTAMPTZ (DATETIME) | DEFAULT CURRENT_TIMESTAMP | Yes | Creation timestamp |
+| updated_at | TIMESTAMPTZ (DATETIME) | DEFAULT CURRENT_TIMESTAMP | Yes | Last update |
 
-**Indexes**: `idx_facilities_name`, `idx_facilities_type`, `idx_facilities_is_active`
+**Indexes**: `idx_facilities_name`, `idx_facilities_type`, `idx_facilities_is_active`, `idx_facilities_region_id`
+
+**Backend Implementation**: ✅ `backend/routes/facilities.js`
+- GET `/api/facilities` - List all facilities with filters (search, facility_type, region_id, is_active)
+- GET `/api/facilities/:id` - Get single facility
+- POST `/api/facilities` - Create facility
+- PUT `/api/facilities/:id` - Update facility
+- DELETE `/api/facilities/:id` - Soft delete (set is_active = 0)
+- GET `/api/facilities/by-region/:regionId` - Get facilities by region
+- GET `/api/facilities/stats/overview` - Facility statistics
+
+**Frontend Usage**: Used in patient registration, appointments, clinical visits, HTS sessions, and throughout the system for facility filtering.
 
 #### **9.2. system_settings**
 | Column Name | Data Type | Constraints | Required | Description |
 |------------|-----------|-------------|----------|-------------|
-| setting_key | VARCHAR(100) | PRIMARY KEY | Yes | Setting key (e.g., 'system.name') |
-| setting_value | JSONB | NOT NULL | Yes | Setting value (can be string, number, object, array) |
+| setting_key | VARCHAR(100) | PRIMARY KEY | Yes | Setting key (e.g., 'system.name', 'email.smtp_host') |
+| setting_value | JSONB (LONGTEXT) | NOT NULL, CHECK (json_valid) | Yes | Setting value (can be string, number, object, array) |
 | description | TEXT | | No | Setting description |
-| updated_at | TIMESTAMPTZ | DEFAULT NOW() | Yes | Last update timestamp |
-| updated_by | UUID | FOREIGN KEY → users(user_id) | No | User who updated |
+| updated_at | TIMESTAMPTZ (DATETIME) | DEFAULT CURRENT_TIMESTAMP | Yes | Last update timestamp |
+| updated_by | UUID (CHAR(36)) | FOREIGN KEY → users(user_id) | No | User who updated |
+
+**Indexes**: `idx_system_settings_key`
+
+**Backend Implementation**: ❌ **MISSING** - Route not implemented
+- **Required**: `backend/routes/system-settings.js`
+- **Endpoints Needed**:
+  - GET `/api/system-settings` - Get all settings
+  - GET `/api/system-settings/:key` - Get specific setting
+  - POST `/api/system-settings` - Create/update setting
+  - PUT `/api/system-settings/:key` - Update setting
+  - DELETE `/api/system-settings/:key` - Delete setting
+
+**Frontend Usage**: Should be used in Settings page for system configuration (email settings, notification preferences, system branding, etc.)
 
 #### **9.3. user_facility_assignments**
 | Column Name | Data Type | Constraints | Required | Description |
 |------------|-----------|-------------|----------|-------------|
-| assignment_id | UUID | PRIMARY KEY | Yes | Unique identifier |
-| user_id | UUID | FOREIGN KEY → users(user_id), NOT NULL | Yes | User reference |
-| facility_id | UUID | FOREIGN KEY → facilities(facility_id), NOT NULL | Yes | Facility reference |
-| is_primary | BOOLEAN | DEFAULT false | Yes | Primary facility flag |
-| assigned_at | TIMESTAMPTZ | DEFAULT NOW() | Yes | Assignment timestamp |
-| assigned_by | UUID | FOREIGN KEY → users(user_id) | No | User who assigned |
+| assignment_id | UUID (CHAR(36)) | PRIMARY KEY | Yes | Unique identifier |
+| user_id | UUID (CHAR(36)) | FOREIGN KEY → users(user_id), NOT NULL | Yes | User reference |
+| facility_id | UUID (CHAR(36)) | FOREIGN KEY → facilities(facility_id), NOT NULL | Yes | Facility reference |
+| is_primary | BOOLEAN (TINYINT(1)) | DEFAULT 0 | Yes | Primary facility flag |
+| assigned_at | TIMESTAMPTZ (DATETIME) | DEFAULT CURRENT_TIMESTAMP | Yes | Assignment timestamp |
+| assigned_by | UUID (CHAR(36)) | FOREIGN KEY → users(user_id) | No | User who assigned |
 
-**Unique Constraint**: `UNIQUE(user_id, facility_id)` where `is_primary = true` (only one primary per user)
+**Unique Constraint**: `UNIQUE(user_id, facility_id)` - One assignment per user-facility pair
 
-**Indexes**: `idx_user_facility_assignments_user_id`, `idx_user_facility_assignments_facility_id`
+**Indexes**: `idx_user_facility_assignments_user_id`, `idx_user_facility_assignments_facility_id`, `idx_user_facility_assignments_is_primary`
+
+**Backend Implementation**: ⚠️ **PARTIAL** - Table exists but no dedicated route
+- **Current**: User facility assignment handled via `users.facility_id` (single primary facility)
+- **Required**: `backend/routes/user-facility-assignments.js` for multi-facility support
+- **Endpoints Needed**:
+  - GET `/api/user-facility-assignments/user/:userId` - Get all facility assignments for user
+  - POST `/api/user-facility-assignments` - Assign user to facility
+  - PUT `/api/user-facility-assignments/:id` - Update assignment (e.g., set primary)
+  - DELETE `/api/user-facility-assignments/:id` - Remove assignment
+
+**Frontend Usage**: Should be used in User Management to assign users to multiple facilities.
 
 #### **9.4. regions**
 | Column Name | Data Type | Constraints | Required | Description |
@@ -1010,10 +1045,21 @@ This document provides a comprehensive breakdown of the database structure per m
 | region_id | INTEGER | PRIMARY KEY | Yes | Unique region identifier (Philippines region code) |
 | region_name | VARCHAR(150) | NOT NULL | Yes | Region name (e.g., 'National Capital Region (NCR)') |
 | region_code | VARCHAR(20) | UNIQUE | No | Region code (e.g., 'NCR', 'I', 'II') |
-| is_active | BOOLEAN | DEFAULT true | Yes | Active region flag |
-| created_at | TIMESTAMPTZ | DEFAULT NOW() | Yes | Creation timestamp |
+| is_active | BOOLEAN (TINYINT(1)) | DEFAULT 1 | Yes | Active region flag |
+| created_at | TIMESTAMPTZ (DATETIME) | DEFAULT CURRENT_TIMESTAMP | Yes | Creation timestamp |
 
 **Indexes**: `idx_regions_code`, `idx_regions_is_active`
+
+**Backend Implementation**: ✅ `backend/routes/regions.js`
+- GET `/api/regions` - List all regions with filters (is_active, search)
+- GET `/api/regions/:id` - Get single region
+- POST `/api/regions` - Create region
+- PUT `/api/regions/:id` - Update region
+- DELETE `/api/regions/:id` - Soft delete (set is_active = 0)
+- DELETE `/api/regions/:id/permanent` - Hard delete (with validation)
+- GET `/api/regions/stats/overview` - Region statistics
+
+**Frontend Usage**: Used in facility management, patient registration (address), and reporting filters.
 
 #### **9.5. client_types**
 | Column Name | Data Type | Constraints | Required | Description |
@@ -1022,37 +1068,128 @@ This document provides a comprehensive breakdown of the database structure per m
 | type_name | VARCHAR(200) | NOT NULL | Yes | Client type name (e.g., 'Males having Sex with Males') |
 | type_code | VARCHAR(50) | UNIQUE | No | Type code (e.g., 'MSM', 'FSW') |
 | description | TEXT | | No | Type description |
-| is_active | BOOLEAN | DEFAULT true | Yes | Active type flag |
-| created_at | TIMESTAMPTZ | DEFAULT NOW() | Yes | Creation timestamp |
+| is_active | BOOLEAN (TINYINT(1)) | DEFAULT 1 | Yes | Active type flag |
+| created_at | TIMESTAMPTZ (DATETIME) | DEFAULT CURRENT_TIMESTAMP | Yes | Creation timestamp |
 
 **Indexes**: `idx_client_types_code`, `idx_client_types_is_active`
 
+**Backend Implementation**: ❌ **MISSING** - Route not implemented
+- **Required**: `backend/routes/client-types.js`
+- **Endpoints Needed**:
+  - GET `/api/client-types` - List all client types with filters (is_active, search)
+  - GET `/api/client-types/:id` - Get single client type
+  - POST `/api/client-types` - Create client type
+  - PUT `/api/client-types/:id` - Update client type
+  - DELETE `/api/client-types/:id` - Soft delete (set is_active = 0)
+
+**Frontend Usage**: Used in HTS sessions, patient registration, and reporting (Module 2, Module 7).
+
+**Connection to Other Modules**:
+- **Module 2 (Patient Management)**: Client types used in patient demographics
+- **Module 7 (Care Coordination)**: Client types used in HTS sessions and counseling
+- **Module 8 (Reporting)**: Client types used in patient demographic reports
+
 ### **Required Data**:
 - **Manage Users**: username, email, password, full_name, role, facility_id
-- **Manage Facilities**: facility_name, facility_type, address, contact information
-- **System Settings**: setting_key, setting_value
+- **Manage Facilities**: facility_name, facility_type, address, region_id, contact information
+- **System Settings**: setting_key, setting_value, description
+- **Regions**: region_name, region_code
+- **Client Types**: type_name, type_code, description
 
 ### **System Flow**:
 1. **Manage Users (P9.1)**:
    - Admin creates/updates user → save to `users` (D1)
    - Assign roles → save to `user_roles` (D1)
-   - Assign facilities → save to `user_facility_assignments` (D9)
+   - Assign primary facility → update `users.facility_id` (D1)
+   - Assign additional facilities → save to `user_facility_assignments` (D9)
    - Log audit entry to `audit_log` (D8)
 
 2. **Manage Facilities (P9.2)**:
    - Admin creates/updates facility → save to `facilities` (D9)
+   - Link to region → set `region_id` from `regions` (D9)
    - Update facility assignments → update `user_facility_assignments` (D9)
+   - Validate no active patients/appointments before deactivation
    - Log audit entry to `audit_log` (D8)
 
-3. **System Configuration (P9.5)**:
+3. **Manage Regions (P9.3)**:
+   - Admin creates/updates region → save to `regions` (D9)
+   - Validate no active facilities before deletion
+   - Log audit entry to `audit_log` (D8)
+
+4. **Manage Client Types (P9.4)**:
+   - Admin creates/updates client type → save to `client_types` (D9)
+   - Used in patient registration and HTS sessions
+   - Log audit entry to `audit_log` (D8)
+
+5. **System Configuration (P9.5)**:
    - Admin updates settings → save to `system_settings` (D9)
-   - Apply configuration → update system behavior
+   - Apply configuration → update system behavior (email, notifications, branding)
+   - Cache settings for performance
+   - Log audit entry to `audit_log` (D8)
+
+6. **User Facility Assignments (P9.6)**:
+   - Admin assigns user to facility → save to `user_facility_assignments` (D9)
+   - Set primary facility → ensure only one `is_primary = true` per user
+   - Used for multi-facility access control
    - Log audit entry to `audit_log` (D8)
 
 ### **Data Retrieval Points**:
-- **D1 (Users Database)**: User accounts, roles, permissions
-- **D9 (Facilities, System Settings, Regions, Client Types)**: Facility information, system configuration, reference data
+- **D1 (Users Database)**: User accounts, roles, permissions, primary facility
+- **D9 (Facilities, System Settings, Regions, Client Types, User Facility Assignments)**: 
+  - Facility information for all modules
+  - System configuration for application behavior
+  - Reference data (regions, client types) for dropdowns and filters
+  - Multi-facility user assignments
 - **D8 (Audit Log)**: All administrative actions
+
+### **Cross-Module Connections**:
+1. **All Modules**: Facilities used for filtering and data scoping
+2. **Module 2 (Patient Management)**: Client types, regions, facilities
+3. **Module 3 (Clinical Care)**: Facilities, providers (users)
+4. **Module 4 (Medication Management)**: Facilities for inventory and dispensing
+5. **Module 5 (Lab Test Management)**: Facilities for lab orders
+6. **Module 6 (Appointment Scheduling)**: Facilities, providers, availability
+7. **Module 7 (Care Coordination)**: Facilities, client types, regions
+8. **Module 8 (Reporting & Analytics)**: All reference data for filtering and grouping
+
+### **Implementation Status**:
+- ✅ **facilities** - Fully implemented (backend + frontend usage)
+- ✅ **regions** - Fully implemented (backend + frontend usage)
+- ✅ **user_facility_assignments** - Fully implemented (backend route created)
+- ✅ **system_settings** - Fully implemented (backend route created)
+- ✅ **client_types** - Fully implemented (backend route created)
+
+### **Backend Routes Summary**:
+1. **Facilities** (`/api/facilities`): ✅ Complete
+   - GET, POST, PUT, DELETE operations
+   - Statistics and region filtering
+
+2. **Regions** (`/api/regions`): ✅ Complete
+   - GET, POST, PUT, DELETE operations
+   - Statistics and validation
+
+3. **System Settings** (`/api/system-settings`): ✅ Complete
+   - GET, POST, PUT, DELETE operations
+   - JSON value parsing
+   - Admin-only access
+
+4. **Client Types** (`/api/client-types`): ✅ Complete
+   - GET, POST, PUT, DELETE operations
+   - Public read, admin write
+   - Statistics endpoint
+
+5. **User Facility Assignments** (`/api/user-facility-assignments`): ✅ Complete
+   - GET by user, GET by facility
+   - POST, PUT, DELETE operations
+   - Primary facility management
+   - Auto-sync with users.facility_id
+
+### **Recommended Next Steps (Frontend)**:
+1. ✅ Backend routes created - Ready for frontend integration
+2. Add system settings UI in Settings page (admin only)
+3. Add client types management UI in admin panel
+4. Add user-facility assignment UI in User Management
+5. Update existing forms to use client-types API instead of hardcoded values
 
 ---
 

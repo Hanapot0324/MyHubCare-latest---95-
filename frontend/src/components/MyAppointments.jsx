@@ -981,43 +981,79 @@ const MyAppointments = ({ socket }) => {
                         )}
                     </div>
                     <div style={{ marginTop: '15px' }}>
-                        {(apt.status === 'scheduled' || apt.status === 'confirmed') && (
-                            <>
-                                <button 
-                                    onClick={() => handleEditAppointment(apt)}
-                                    style={{
-                                        padding: '8px 16px',
-                                        marginRight: '8px',
-                                        background: '#D84040',
-                                        color: 'white',
-                                        border: 'none',
-                                        borderRadius: '4px',
-                                        cursor: 'pointer',
-                                        transition: 'background 0.2s ease'
-                                    }}
-                                    onMouseEnter={(e) => e.target.style.background = '#0056b3'}
-                                    onMouseLeave={(e) => e.target.style.background = '#007bff'}
-                                >
-                                    Edit
-                                </button>
-                                <button 
-                                    onClick={() => handleDeleteAppointment(apt.appointment_id)}
-                                    style={{
-                                        padding: '8px 16px',
-                                        background: '#dc3545',
-                                        color: 'white',
-                                        border: 'none',
-                                        borderRadius: '4px',
-                                        cursor: 'pointer',
-                                        transition: 'background 0.2s ease'
-                                    }}
-                                    onMouseEnter={(e) => e.target.style.background = '#c82333'}
-                                    onMouseLeave={(e) => e.target.style.background = '#dc3545'}
-                                >
-                                    Cancel
-                                </button>
-                            </>
-                        )}
+                        {/* Check if this appointment belongs to the current user */}
+                        {(() => {
+                            // For patients: only show buttons for their own appointments
+                            // For physicians: show buttons for all appointments
+                            const isPatientOwnAppointment = currentUserRole === 'patient' 
+                                ? (apt.patient_id === currentPatientId) 
+                                : true; // Physicians can manage all appointments
+                            
+                            if (!isPatientOwnAppointment) {
+                                return null; // Don't show buttons if patient doesn't own this appointment
+                            }
+
+                            // Determine which buttons to show based on role and status
+                            const isConfirmed = apt.status === 'confirmed';
+                            const isActiveStatus = apt.status === 'scheduled' || 
+                                                   apt.status === 'confirmed' || 
+                                                   apt.status === 'pending_provider_confirmation' || 
+                                                   apt.status === 'pending_patient_confirmation';
+                            const isCompletedOrCancelled = apt.status === 'completed' || apt.status === 'cancelled';
+
+                            // Patients can only edit/cancel if NOT confirmed
+                            // Physicians can edit/cancel any active appointment
+                            const canEdit = isActiveStatus && !isCompletedOrCancelled && 
+                                          (currentUserRole !== 'patient' || !isConfirmed);
+                            const canCancel = isActiveStatus && !isCompletedOrCancelled && 
+                                            (currentUserRole !== 'patient' || !isConfirmed);
+
+                            if (!canEdit && !canCancel) {
+                                return null;
+                            }
+
+                            return (
+                                <>
+                                    {canEdit && (
+                                        <button 
+                                            onClick={() => handleEditAppointment(apt)}
+                                            style={{
+                                                padding: '8px 16px',
+                                                marginRight: '8px',
+                                                background: '#D84040',
+                                                color: 'white',
+                                                border: 'none',
+                                                borderRadius: '4px',
+                                                cursor: 'pointer',
+                                                transition: 'background 0.2s ease'
+                                            }}
+                                            onMouseEnter={(e) => e.target.style.background = '#b83232'}
+                                            onMouseLeave={(e) => e.target.style.background = '#D84040'}
+                                        >
+                                            Edit
+                                        </button>
+                                    )}
+                                    {canCancel && (
+                                        <button 
+                                            onClick={() => handleDeleteAppointment(apt.appointment_id)}
+                                            style={{
+                                                padding: '8px 16px',
+                                                background: '#dc3545',
+                                                color: 'white',
+                                                border: 'none',
+                                                borderRadius: '4px',
+                                                cursor: 'pointer',
+                                                transition: 'background 0.2s ease'
+                                            }}
+                                            onMouseEnter={(e) => e.target.style.background = '#c82333'}
+                                            onMouseLeave={(e) => e.target.style.background = '#dc3545'}
+                                        >
+                                            Cancel
+                                        </button>
+                                    )}
+                                </>
+                            );
+                        })()}
                     </div>
                 </div>
             );
