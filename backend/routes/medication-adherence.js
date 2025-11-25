@@ -956,6 +956,118 @@ router.delete('/reminders/:id', async (req, res) => {
   }
 });
 
+// Acknowledge medication reminder
+router.post('/reminders/:id/acknowledge', async (req, res) => {
+  let userInfo = null;
+
+  try {
+    const { id } = req.params;
+
+    // Get user info for audit logging
+    if (req.user?.user_id) {
+      userInfo = await getUserInfoForAudit(req.user.user_id);
+    }
+
+    // Check if reminder exists
+    const [reminderCheck] = await db.query(
+      `SELECT mr.*, 
+              CONCAT(pa.first_name, ' ', pa.last_name) as patient_name
+       FROM medication_reminders mr
+       LEFT JOIN patients pa ON mr.patient_id = pa.patient_id
+       WHERE mr.reminder_id = ?`,
+      [id]
+    );
+
+    if (reminderCheck.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Medication reminder not found',
+      });
+    }
+
+    const reminder = reminderCheck[0];
+
+    // Update acknowledgment fields (if they exist, otherwise just update updated_at)
+    try {
+      await db.query(`
+        UPDATE medication_reminders 
+        SET last_acknowledged_at = NOW(),
+            acknowledgment_count = COALESCE(acknowledgment_count, 0) + 1,
+            updated_at = CURRENT_TIMESTAMP 
+        WHERE reminder_id = ?
+      `, [id]);
+    } catch (error) {
+      // If new columns don't exist yet, just update updated_at
+      await db.query(`
+        UPDATE medication_reminders 
+        SET updated_at = CURRENT_TIMESTAMP 
+        WHERE reminder_id = ?
+      `, [id]);
+    }
+
+    // Fetch updated reminder
+    const [updatedReminder] = await db.query(
+      `SELECT mr.*, 
+              p.prescription_number,
+              CONCAT(pa.first_name, ' ', pa.last_name) as patient_name
+       FROM medication_reminders mr
+       LEFT JOIN prescriptions p ON mr.prescription_id = p.prescription_id
+       LEFT JOIN patients pa ON mr.patient_id = pa.patient_id
+       WHERE mr.reminder_id = ?`,
+      [id]
+    );
+
+    // Log audit entry
+    if (userInfo) {
+      await logAudit({
+        user_id: userInfo.user_id,
+        user_name: userInfo.user_name,
+        user_role: userInfo.user_role,
+        action: 'ACKNOWLEDGE',
+        module: 'Medication Adherence',
+        entity_type: 'medication_reminder',
+        entity_id: id,
+        record_id: id,
+        change_summary: `Acknowledged medication reminder for ${reminder.medication_name}`,
+        ip_address: getClientIp(req),
+        user_agent: req.headers['user-agent'],
+        status: 'success',
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Medication reminder acknowledged successfully',
+      data: updatedReminder[0],
+    });
+  } catch (error) {
+    console.error('Error acknowledging medication reminder:', error);
+
+    // Log failed audit entry
+    if (userInfo) {
+      await logAudit({
+        user_id: userInfo.user_id,
+        user_name: userInfo.user_name,
+        user_role: userInfo.user_role,
+        action: 'ACKNOWLEDGE',
+        module: 'Medication Adherence',
+        entity_type: 'medication_reminder',
+        entity_id: req.params.id,
+        status: 'failed',
+        error_message: error.message,
+        ip_address: getClientIp(req),
+        user_agent: req.headers['user-agent'],
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Failed to acknowledge medication reminder',
+      error: error.message,
+    });
+  }
+});
+
 // Toggle medication reminder active status
 router.put('/reminders/:id/toggle', async (req, res) => {
   let userInfo = null;

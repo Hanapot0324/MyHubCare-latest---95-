@@ -2,6 +2,14 @@ import { db } from '../db.js';
 import { createNotification } from '../routes/notifications.js';
 import { v4 as uuidv4 } from 'uuid';
 
+// Socket.IO instance (will be set by server.js)
+let io = null;
+
+// Function to set Socket.IO instance
+export const setSocketIO = (socketIO) => {
+  io = socketIO;
+};
+
 /**
  * Process appointment reminders that are due to be sent
  * This should be called periodically (e.g., every minute via cron job)
@@ -292,6 +300,244 @@ export async function createAppointmentReminders(appointmentId, scheduledStart) 
   } catch (error) {
     console.error('Error creating appointment reminders:', error);
     return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Process medication reminders that are due to be sent
+ * This should be called periodically (e.g., every minute via cron job)
+ * Module 13: Medication Reminders
+ */
+export async function processMedicationReminders() {
+  try {
+    // Get all active reminders that are due now (within current minute)
+    // Check if reminder hasn't been triggered today to avoid duplicate notifications
+    const [reminders] = await db.query(`
+      SELECT 
+        mr.*,
+        p.first_name,
+        p.last_name,
+        p.contact_phone AS phone_number,
+        p.email,
+        u.user_id AS patient_user_id
+      FROM medication_reminders mr
+      INNER JOIN patients p ON mr.patient_id = p.patient_id
+      LEFT JOIN users u ON p.created_by = u.user_id OR p.email = u.email
+      WHERE mr.active = 1
+        AND TIME(mr.reminder_time) = TIME(NOW())
+        AND (
+          mr.last_triggered_at IS NULL 
+          OR DATE(mr.last_triggered_at) != CURDATE()
+        )
+    `);
+
+    if (reminders.length > 0) {
+      console.log(`Processing ${reminders.length} medication reminders...`);
+    }
+
+    for (const reminder of reminders) {
+      try {
+        await sendMedicationReminder(reminder);
+        
+        // Update last_triggered_at to prevent duplicate triggers on the same day
+        await db.query(`
+          UPDATE medication_reminders
+          SET last_triggered_at = NOW()
+          WHERE reminder_id = ?
+        `, [reminder.reminder_id]);
+        
+        console.log(`Medication reminder sent successfully: ${reminder.reminder_id}`);
+      } catch (error) {
+        console.error(`Error sending medication reminder ${reminder.reminder_id}:`, error);
+        // Don't throw - continue processing other reminders
+      }
+    }
+
+    return { success: true, processed: reminders.length };
+  } catch (error) {
+    console.error('Error processing medication reminders:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Send a medication reminder via multiple channels
+ * Module 13: Medication Reminders
+ */
+async function sendMedicationReminder(reminder) {
+  const {
+    reminder_id,
+    patient_id,
+    medication_name,
+    dosage,
+    frequency,
+    sound_preference,
+    browser_notifications,
+    special_instructions,
+    patient_user_id,
+    phone_number,
+    email,
+    first_name,
+    last_name
+  } = reminder;
+
+  const patientName = `${first_name || ''} ${last_name || ''}`.trim() || 'Patient';
+  const medicationInfo = `${medication_name}${dosage ? ` (${dosage})` : ''}`;
+  const message = `Time to take ${medicationInfo}${special_instructions ? `. ${special_instructions}` : ''}`;
+
+  // Always send in-app notification if patient has user account
+  if (patient_user_id) {
+    try {
+      const payload = {
+        type: 'medication_reminder',
+        reminder_id,
+        medication_name,
+        dosage,
+        frequency,
+        sound_preference: sound_preference || 'default',
+        special_instructions
+      };
+
+      await createNotification({
+        recipient_id: patient_user_id,
+        patient_id: patient_id,
+        title: 'Medication Reminder',
+        message: message,
+        type: 'medication_reminder',
+        payload: JSON.stringify(payload)
+      });
+
+      // Emit Socket.IO notification for real-time mobile/web updates
+      if (io) {
+        try {
+          io.to(`user_${patient_user_id}`).emit('medicationReminder', {
+            type: 'medication_reminder',
+            reminder_id,
+            medication_name,
+            dosage,
+            frequency,
+            sound_preference: sound_preference || 'default',
+            special_instructions,
+            message: message,
+            timestamp: new Date().toISOString()
+          });
+          console.log(`Socket.IO medication reminder emitted to user ${patient_user_id}`);
+        } catch (socketError) {
+          console.error('Error emitting Socket.IO medication reminder:', socketError);
+          // Don't fail if Socket.IO fails
+        }
+      }
+
+      console.log(`In-app medication reminder sent to patient ${patient_id}`);
+    } catch (error) {
+      console.error(`Error sending in-app medication reminder:`, error);
+      // Continue with other channels even if in-app fails
+    }
+  }
+
+  // Send SMS if browser_notifications is enabled and phone number exists
+  if (browser_notifications && phone_number) {
+    try {
+      await sendMedicationSMSReminder(phone_number, patientName, medicationInfo, message, reminder);
+    } catch (error) {
+      console.error(`Error sending SMS medication reminder:`, error);
+      // Continue with other channels
+    }
+  }
+
+  // Send email if browser_notifications is enabled and email exists
+  if (browser_notifications && email) {
+    try {
+      await sendMedicationEmailReminder(email, patientName, medicationInfo, message, reminder);
+    } catch (error) {
+      console.error(`Error sending email medication reminder:`, error);
+      // Continue even if email fails
+    }
+  }
+}
+
+/**
+ * Send SMS reminder for medication
+ * Module 13: Medication Reminders
+ */
+async function sendMedicationSMSReminder(phoneNumber, patientName, medicationInfo, message, reminder) {
+  try {
+    const fullMessage = `MyHubCares: ${message} - ${patientName}`;
+
+    // Get patient_id from reminder
+    const patientId = reminder.patient_id || null;
+    
+    // Log SMS to sms_logs table (if table exists)
+    try {
+      const sms_id = uuidv4();
+      await db.query(`
+        INSERT INTO sms_logs (
+          sms_id, patient_id, phone_number, message, status, sent_at
+        ) VALUES (?, ?, ?, ?, 'sent', NOW())
+      `, [sms_id, patientId, phoneNumber, fullMessage]);
+    } catch (error) {
+      // If sms_logs table doesn't exist, just log to console
+      console.warn('sms_logs table not found, skipping SMS log');
+    }
+
+    // TODO: Integrate with actual SMS service (Twilio, AWS SNS, etc.)
+    console.log(`SMS medication reminder sent to ${phoneNumber}: ${fullMessage}`);
+    
+    return { success: true };
+  } catch (error) {
+    console.error('Error sending SMS medication reminder:', error);
+    throw error;
+  }
+}
+
+/**
+ * Send Email reminder for medication
+ * Module 13: Medication Reminders
+ */
+async function sendMedicationEmailReminder(email, patientName, medicationInfo, message, reminder) {
+  try {
+    const subject = `Medication Reminder: ${medicationInfo}`;
+    const emailBody = `
+      Dear ${patientName},
+
+      This is a reminder to take your medication:
+
+      Medication: ${medicationInfo}
+      Frequency: ${reminder.frequency || 'As prescribed'}
+      ${reminder.special_instructions ? `Special Instructions: ${reminder.special_instructions}` : ''}
+      
+      Please take your medication as prescribed by your healthcare provider.
+      
+      If you have any questions or concerns, please contact your healthcare provider.
+      
+      Thank you,
+      MyHubCares
+    `.trim();
+
+    // Get patient_id and user_id from reminder
+    const patientId = reminder.patient_id || null;
+    const userId = reminder.patient_user_id || null;
+    
+    // Log email to email_logs table (if table exists)
+    try {
+      const email_id = uuidv4();
+      await db.query(`
+        INSERT INTO email_logs (
+          email_id, user_id, patient_id, subject, message, status, sent_at
+        ) VALUES (?, ?, ?, ?, ?, 'sent', NOW())
+      `, [email_id, userId, patientId, subject, emailBody]);
+    } catch (error) {
+      // If email_logs table doesn't exist, just log to console
+      console.warn('email_logs table not found, skipping email log');
+    }
+
+    // TODO: Integrate with actual email service (SendGrid, AWS SES, etc.)
+    console.log(`Email medication reminder sent to ${email}: ${subject}`);
+    
+    return { success: true };
+  } catch (error) {
+    console.error('Error sending email medication reminder:', error);
+    throw error;
   }
 }
 

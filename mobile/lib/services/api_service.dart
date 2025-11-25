@@ -462,10 +462,24 @@ class ApiService {
       
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        return {'success': true, 'data': data['reminders'] ?? data['data'] ?? []};
+        // Match frontend behavior: check data.data first, then data.reminders
+        if (data['success'] == true) {
+          return {
+            'success': true, 
+            'data': data['data'] ?? data['reminders'] ?? [],
+            'reminders': data['reminders'], // Include for compatibility
+          };
+        }
+        return {'success': false, 'message': 'API returned success: false'};
       }
       
-      return {'success': false, 'message': 'Failed to fetch reminders'};
+      String errorMessage = 'Failed to fetch reminders';
+      try {
+        final errorData = jsonDecode(response.body);
+        errorMessage = errorData['message'] ?? errorMessage;
+      } catch (_) {}
+      
+      return {'success': false, 'message': errorMessage};
     } catch (e) {
       return {'success': false, 'message': 'Connection error: ${e.toString()}'};
     }
@@ -710,6 +724,32 @@ class ApiService {
       }
       
       return {'success': false, 'message': 'Failed to fetch adherence statistics'};
+    } catch (e) {
+      return {'success': false, 'message': 'Connection error: ${e.toString()}'};
+    }
+  }
+
+  // Acknowledge medication reminder
+  static Future<Map<String, dynamic>> acknowledgeMedicationReminder(String reminderId) async {
+    try {
+      final headers = await getHeaders();
+      final response = await http.post(
+        Uri.parse('$baseUrl/medication-adherence/reminders/$reminderId/acknowledge'),
+        headers: headers,
+      );
+      
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        final data = jsonDecode(response.body);
+        return {'success': true, 'data': data['data']};
+      }
+      
+      String errorMessage = 'Failed to acknowledge reminder';
+      try {
+        final errorData = jsonDecode(response.body);
+        errorMessage = errorData['message'] ?? errorMessage;
+      } catch (_) {}
+      
+      return {'success': false, 'message': errorMessage};
     } catch (e) {
       return {'success': false, 'message': 'Connection error: ${e.toString()}'};
     }

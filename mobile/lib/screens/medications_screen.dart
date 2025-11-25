@@ -30,6 +30,7 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
   bool _isActive = true;
   bool _browserNotifications = true;
   String? _selectedPrescriptionId;
+  String _medicationName = ''; // Track medication name separately for Autocomplete
 
   @override
   void initState() {
@@ -38,24 +39,42 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
   }
 
   Future<void> _initializeData() async {
+    // Load user info first to get patientId (needed for creating reminders)
     await _loadUserInfo();
-    await _loadReminders();
+    // Load data in parallel like dashboard does (reminders and prescriptions don't need patientId)
+    await Future.wait([
+      _loadReminders(),
+      _loadPrescriptions(),
+    ]);
+    // Load adherence data separately since it needs patientId
     await _loadAdherenceData();
   }
   
   Future<void> _loadPrescriptions() async {
-    if (_patientId == null) return;
-    
     try {
-      final result = await ApiService.getPrescriptions(patientId: _patientId);
+      // Load prescriptions from API (same as frontend - backend will use authenticated user's patient_id)
+      final result = await ApiService.getPrescriptions();
       if (result['success'] == true) {
+        final prescriptions = result['data'] ?? [];
+        print('💊 Loaded ${prescriptions.length} prescriptions');
+        
         setState(() {
-          _prescriptions = result['data'] ?? [];
+          _prescriptions = prescriptions;
           _extractPrescribedMedications();
+        });
+      } else {
+        print('❌ Failed to load prescriptions: ${result['message']}');
+        setState(() {
+          _prescriptions = [];
+          _prescribedMedications = [];
         });
       }
     } catch (e) {
-      print('Error loading prescriptions: $e');
+      print('❌ Error loading prescriptions: $e');
+      setState(() {
+        _prescriptions = [];
+        _prescribedMedications = [];
+      });
     }
   }
   
@@ -90,85 +109,78 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
     try {
       final userResult = await ApiService.getCurrentUser();
       if (userResult['success'] == true && userResult['user'] != null) {
+        final user = userResult['user'];
+        // Try multiple ways to get patient_id
+        final patientId = user['patient_id'] ?? 
+                         user['patient']?['patient_id'] ?? 
+                         user['user_id'];
+        
+        print('👤 Loaded user info - patient_id: $patientId');
+        
         setState(() {
-          _patientId = userResult['user']['patient_id'] ?? userResult['user']['user_id'];
+          _patientId = patientId?.toString();
         });
-        // Load prescriptions after patient ID is set
-        await _loadPrescriptions();
+      } else {
+        print('❌ Failed to load user info: ${userResult['message']}');
       }
     } catch (e) {
-      print('Error loading user info: $e');
+      print('❌ Error loading user info: $e');
     }
   }
 
   Future<void> _loadReminders() async {
-    if (_patientId == null) return;
-    
     setState(() => _isLoading = true);
     try {
-      // Load reminders from API (same as web)
-      final remindersResult = await ApiService.getMedicationReminders(
-        patientId: _patientId,
-      );
+      // Load reminders from API (same as dashboard - backend will use authenticated user's patient_id from token)
+      print('🔔 Loading reminders from API...');
+      final remindersResult = await ApiService.getMedicationReminders();
       
-      List<dynamic> remindersFromAPI = [];
+      print('📡 Reminders API response: ${remindersResult['success']}');
+      
+      List<dynamic> remindersList = [];
       if (remindersResult['success'] == true) {
-        remindersFromAPI = remindersResult['data'] as List;
+        // Handle both 'data' and 'reminders' response formats (for compatibility)
+        remindersList = remindersResult['data'] as List? ?? [];
+        print('✅ Loaded ${remindersList.length} reminders from API');
+      } else {
+        print('❌ Failed to load reminders: ${remindersResult['message']}');
+        remindersList = [];
       }
       
-      // Also load from prescriptions and build reminders (like web does)
-      if (_prescriptions.isEmpty) {
-        await _loadPrescriptions();
-      }
-      
-      List<dynamic> remindersFromPrescriptions = [];
-      for (var prescription in _prescriptions) {
-        if (prescription['status'] == 'active' && prescription['items'] != null) {
-          for (var item in prescription['items']) {
-            remindersFromPrescriptions.add({
-              'reminder_id': 'reminder-${prescription['prescription_id']}-${item['prescription_item_id']}',
-              'prescription_id': prescription['prescription_id'],
-              'patient_id': _patientId,
-              'medication_name': item['medication_name'],
-              'dosage': item['dosage'],
-              'frequency': item['frequency'],
-              'reminder_time': '09:00:00', // Default reminder time
-              'active': prescription['status'] == 'active',
-              'missed_doses': 0,
-              'browser_notifications': true,
-            });
-          }
-        }
-      }
-      
-      // Combine both sources, prioritizing API reminders
-      final allReminders = <dynamic>[];
-      final seenIds = <String>{};
-      
-      // Add API reminders first
-      for (var reminder in remindersFromAPI) {
-        final id = reminder['reminder_id']?.toString() ?? reminder['id']?.toString();
-        if (id != null && !seenIds.contains(id)) {
-          allReminders.add(reminder);
-          seenIds.add(id);
-        }
-      }
-      
-      // Add prescription reminders that aren't already in the list
-      for (var reminder in remindersFromPrescriptions) {
-        final id = reminder['reminder_id']?.toString();
-        if (id != null && !seenIds.contains(id)) {
-          allReminders.add(reminder);
-          seenIds.add(id);
-        }
-      }
+      // Normalize the reminder data structure (handle 1/0 vs true/false for active and browser_notifications)
+      final normalizedReminders = remindersList.map((reminder) {
+        return {
+          'reminder_id': reminder['reminder_id'] ?? reminder['id'],
+          'prescription_id': reminder['prescription_id'],
+          'patient_id': reminder['patient_id'] ?? _patientId,
+          'medication_name': reminder['medication_name'],
+          'dosage': reminder['dosage'],
+          'frequency': reminder['frequency'],
+          'reminder_time': reminder['reminder_time'] ?? '09:00:00',
+          'active': reminder['active'] != null 
+              ? (reminder['active'] == 1 || reminder['active'] == true) 
+              : true,
+          'missed_doses': reminder['missed_doses'] ?? 0,
+          'browser_notifications': reminder['browser_notifications'] != null 
+              ? (reminder['browser_notifications'] == 1 || reminder['browser_notifications'] == true) 
+              : true,
+          'sound_preference': reminder['sound_preference'] ?? 'default',
+          'special_instructions': reminder['special_instructions'],
+        };
+      }).toList();
       
       setState(() {
-        _reminders = allReminders;
+        _reminders = normalizedReminders;
         _isLoading = false;
       });
+      
+      print('📋 Final reminders count: ${normalizedReminders.length}');
     } catch (e) {
-      setState(() => _isLoading = false);
+      print('❌ Error loading reminders: $e');
+      setState(() {
+        _reminders = [];
+        _isLoading = false;
+      });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -181,19 +193,70 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
   }
 
   Future<void> _loadAdherenceData() async {
-    if (_patientId == null) return;
+    // Get patientId first if not set
+    if (_patientId == null) {
+      await _loadUserInfo();
+    }
+    
+    if (_patientId == null) {
+      print('⚠️ Patient ID not available for adherence data');
+      setState(() {
+        _adherenceRecords = [];
+        _adherenceSummary = {};
+        _adherenceRate = 0.0;
+      });
+      return;
+    }
 
     try {
-      final result = await ApiService.getPatientAdherence(patientId: _patientId!);
+      // Load adherence records from API using general endpoint with patient_id query param (same as backend route)
+      print('📊 Loading adherence data for patient: $_patientId');
+      final result = await ApiService.getMedicationAdherence(patientId: _patientId);
+      
       if (result['success'] == true) {
+        final records = result['data'] ?? [];
+        final summary = result['summary'] ?? {};
+        
+        print('📊 Loaded ${records.length} adherence records');
+        print('📈 Summary: $summary');
+        
         setState(() {
-          _adherenceRecords = result['data'] ?? [];
-          _adherenceSummary = result['summary'] ?? {};
-          _adherenceRate = _adherenceSummary['overall_adherence_percentage']?.toDouble() ?? 0.0;
+          _adherenceRecords = records;
+          _adherenceSummary = summary;
+          // Handle both number and string formats for adherence percentage
+          final adherenceValue = summary['overall_adherence_percentage'];
+          if (adherenceValue != null) {
+            _adherenceRate = adherenceValue is num 
+                ? adherenceValue.toDouble() 
+                : double.tryParse(adherenceValue.toString()) ?? 0.0;
+          } else {
+            _adherenceRate = 0.0;
+          }
+        });
+      } else {
+        print('❌ Failed to load adherence data: ${result['message']}');
+        setState(() {
+          _adherenceRecords = [];
+          _adherenceSummary = {};
+          _adherenceRate = 0.0;
         });
       }
     } catch (e) {
-      print('Error loading adherence data: $e');
+      print('❌ Error loading adherence data: $e');
+      setState(() {
+        _adherenceRecords = [];
+        _adherenceSummary = {};
+        _adherenceRate = 0.0;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error loading adherence data: ${e.toString()}'),
+            backgroundColor: Colors.orange,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
     }
   }
 
@@ -209,11 +272,14 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
     }
 
     final prescriptionId = reminder['prescription_id']?.toString();
-    if (prescriptionId == null) {
+    if (prescriptionId == null || prescriptionId.isEmpty) {
+      // For reminders without prescription_id, we can't record adherence
+      // This happens when reminders are created manually without linking to a prescription
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Prescription ID not found in reminder'),
-          backgroundColor: Colors.red,
+          content: Text('This reminder is not linked to a prescription. Please link it to a prescription to track adherence.'),
+          backgroundColor: Colors.orange,
+          duration: Duration(seconds: 3),
         ),
       );
       return;
@@ -252,6 +318,7 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
             SnackBar(
               content: Text(result['message'] ?? 'Failed to record adherence'),
               backgroundColor: Colors.red,
+              duration: const Duration(seconds: 3),
             ),
           );
         }
@@ -262,6 +329,7 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
           SnackBar(
             content: Text('Error: ${e.toString()}'),
             backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
           ),
         );
       }
@@ -543,7 +611,7 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
 
   Widget _buildMedicationCard(Map<String, dynamic> reminder) {
     final reminderTime = reminder['reminder_time'] ?? '09:00:00';
-    final timeStr = reminderTime.toString().substring(0, 5); // Get HH:MM
+    final timeStr = _formatTimeFromString(reminderTime.toString()); // Format as 12-hour
     final medicationName = reminder['medication_name'] ?? 'Medication';
     final dosage = reminder['dosage'] ?? '';
     final frequency = reminder['frequency'] ?? 'daily';
@@ -555,11 +623,13 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
     // Check if today's dose was already recorded
     final today = DateTime.now();
     final todayStr = '${today.year}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
-    final todayRecord = _adherenceRecords.firstWhere(
-      (record) => record['prescription_id']?.toString() == prescriptionId && 
-                  record['adherence_date'] == todayStr,
-      orElse: () => {},
-    );
+    final todayRecord = prescriptionId != null && prescriptionId.isNotEmpty
+        ? _adherenceRecords.firstWhere(
+            (record) => record['prescription_id']?.toString() == prescriptionId && 
+                        record['adherence_date'] == todayStr,
+            orElse: () => {},
+          )
+        : <String, dynamic>{};
     
     // Get adherence for this reminder
     final reminderAdherence = _getReminderAdherence(reminder);
@@ -636,7 +706,7 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
                           SizedBox(height: 16),
                           _buildInfoRow(
                             Icons.schedule,
-                            'Take $frequency at $timeStr',
+                            'Take $frequency at ${_formatTimeFromString(reminder['reminder_time'] ?? '09:00:00')}',
                           ),
                           if (dosage.isNotEmpty) ...[
                             SizedBox(height: 10),
@@ -645,14 +715,14 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
                               'Dosage: $dosage',
                             ),
                           ],
-                          if (reminderAdherence != null) ...[
+                          if (reminderAdherence != null && prescriptionId != null && prescriptionId.isNotEmpty) ...[
                             SizedBox(height: 10),
                             _buildInfoRow(
                               Icons.trending_up,
                               'Adherence: ${reminderAdherence['percentage']}% (${reminderAdherence['takenCount']}/${reminderAdherence['totalCount']} doses)',
                             ),
                           ],
-                          if (todayRecord.isNotEmpty) ...[
+                          if (todayRecord.isNotEmpty && prescriptionId != null && prescriptionId.isNotEmpty) ...[
                             SizedBox(height: 10),
                             Container(
                               padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -688,46 +758,70 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
                 ),
                 SizedBox(height: 16),
                 if (todayRecord.isEmpty)
-                  Row(
-                    children: [
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: _isMarking
-                              ? null
-                              : () => _markAsTaken(reminder, true),
-                          icon: const Icon(Icons.check_circle, size: 18),
-                          label: const Text('Taken'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF10B981),
-                            foregroundColor: Colors.white,
-                            padding: EdgeInsets.symmetric(vertical: 12),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8),
+                  prescriptionId != null && prescriptionId.isNotEmpty
+                      ? Row(
+                          children: [
+                            Expanded(
+                              child: ElevatedButton.icon(
+                                onPressed: _isMarking
+                                    ? null
+                                    : () => _markAsTaken(reminder, true),
+                                icon: const Icon(Icons.check_circle, size: 18),
+                                label: const Text('Taken'),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFF10B981),
+                                  foregroundColor: Colors.white,
+                                  padding: EdgeInsets.symmetric(vertical: 12),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  elevation: 0,
+                                ),
+                              ),
                             ),
-                            elevation: 0,
+                            SizedBox(width: 10),
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: _isMarking
+                                    ? null
+                                    : () => _markAsTaken(reminder, false),
+                                icon: const Icon(Icons.close, size: 18),
+                                label: const Text('Missed'),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: Colors.orange,
+                                  side: const BorderSide(color: Colors.orange, width: 1.5),
+                                  padding: EdgeInsets.symmetric(vertical: 12),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        )
+                      : Container(
+                          padding: EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.orange.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.orange.withOpacity(0.3)),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(Icons.info_outline, size: 18, color: Colors.orange),
+                              SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  'Link to prescription to track adherence',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.orange[800],
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                      ),
-                      SizedBox(width: 10),
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: _isMarking
-                              ? null
-                              : () => _markAsTaken(reminder, false),
-                          icon: const Icon(Icons.close, size: 18),
-                          label: const Text('Missed'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: Colors.orange,
-                            side: const BorderSide(color: Colors.orange, width: 1.5),
-                            padding: EdgeInsets.symmetric(vertical: 12),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
               ],
             ),
           ),
@@ -763,7 +857,7 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
 
   Map<String, dynamic>? _getReminderAdherence(Map<String, dynamic> reminder) {
     final prescriptionId = reminder['prescription_id']?.toString();
-    if (prescriptionId == null) return null;
+    if (prescriptionId == null || prescriptionId.isEmpty) return null;
     
     final prescriptionAdherence = _adherenceRecords.where(
       (record) => record['prescription_id']?.toString() == prescriptionId
@@ -771,7 +865,7 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
     
     if (prescriptionAdherence.isEmpty) return null;
     
-    final takenCount = prescriptionAdherence.where((r) => r['taken'] == true).length;
+    final takenCount = prescriptionAdherence.where((r) => r['taken'] == true || r['taken'] == 1).length;
     final totalCount = prescriptionAdherence.length;
     final percentage = totalCount > 0 ? ((takenCount / totalCount) * 100).round() : 0;
     
@@ -816,7 +910,7 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
             ),
             const SizedBox(height: 16),
             _buildDetailRow('Frequency', reminder['frequency'] ?? 'N/A'),
-            _buildDetailRow('Time', reminder['reminder_time'] ?? 'N/A'),
+            _buildDetailRow('Time', _formatTimeFromString(reminder['reminder_time'] ?? '09:00:00')),
             if (reminder['dosage'] != null)
               _buildDetailRow('Dosage', reminder['dosage'].toString()),
             if (reminder['missed_doses'] != null && reminder['missed_doses'] > 0)
@@ -855,6 +949,7 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
   void _showAddReminderModal() {
     
     // Reset form
+    _medicationName = '';
     _medicationNameController.clear();
     _dosageController.clear();
     _specialInstructionsController.clear();
@@ -1020,6 +1115,16 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
         const SizedBox(height: 8),
         Autocomplete<String>(
           optionsBuilder: (TextEditingValue textEditingValue) {
+            // Update our tracking variable as user types
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (_medicationName != textEditingValue.text) {
+                setState(() {
+                  _medicationName = textEditingValue.text;
+                  _medicationNameController.text = textEditingValue.text;
+                });
+              }
+            });
+            
             if (textEditingValue.text.isEmpty) {
               return _prescribedMedications
                   .map((m) => m['medication_name'] as String)
@@ -1033,15 +1138,20 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
                 .toList();
           },
           onSelected: (String selection) {
-            _medicationNameController.text = selection;
+            setState(() {
+              _medicationName = selection;
+              _medicationNameController.text = selection;
+            });
             final medication = _prescribedMedications.firstWhere(
               (m) => m['medication_name'] == selection,
               orElse: () => {},
             );
             if (medication.isNotEmpty) {
-              _dosageController.text = medication['dosage'] ?? '';
-              _selectedFrequency = medication['frequency'] ?? 'daily';
-              _selectedPrescriptionId = medication['prescription_id']?.toString();
+              setState(() {
+                _dosageController.text = medication['dosage'] ?? '';
+                _selectedFrequency = medication['frequency'] ?? 'daily';
+                _selectedPrescriptionId = medication['prescription_id']?.toString();
+              });
             }
           },
           fieldViewBuilder: (
@@ -1050,6 +1160,13 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
             FocusNode focusNode,
             VoidCallback onFieldSubmitted,
           ) {
+            // Initialize controller with current value if needed
+            if (_medicationName.isNotEmpty && textEditingController.text.isEmpty) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                textEditingController.text = _medicationName;
+              });
+            }
+            
             return TextFormField(
               controller: textEditingController,
               focusNode: focusNode,
@@ -1058,10 +1175,16 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
                 hintText: 'Select or type medication name',
               ),
               validator: (value) {
-                if (value == null || value.isEmpty) {
+                if (value == null || value.isEmpty || value.trim().isEmpty) {
                   return 'Please enter medication name';
                 }
                 return null;
+              },
+              onChanged: (value) {
+                setState(() {
+                  _medicationName = value;
+                  _medicationNameController.text = value;
+                });
               },
             );
           },
@@ -1124,12 +1247,18 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
   Widget _buildTimeField() {
     return ListTile(
       title: Text('Reminder Time *'),
-      subtitle: Text(_selectedTime.format(context)),
+      subtitle: Text(_formatTime12Hour(_selectedTime)),
       trailing: Icon(Icons.access_time),
       onTap: () async {
         final TimeOfDay? picked = await showTimePicker(
           context: context,
           initialTime: _selectedTime,
+          builder: (context, child) {
+            return MediaQuery(
+              data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: false),
+              child: child!,
+            );
+          },
         );
         if (picked != null) {
           setState(() {
@@ -1138,6 +1267,42 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
         }
       },
     );
+  }
+  
+  String _formatTime12Hour(TimeOfDay time) {
+    final hour = time.hour == 0 
+        ? 12 
+        : time.hour > 12 
+            ? time.hour - 12 
+            : time.hour;
+    final minute = time.minute.toString().padLeft(2, '0');
+    final period = time.hour < 12 ? 'AM' : 'PM';
+    return '$hour:$minute $period';
+  }
+  
+  String _formatTime24Hour(TimeOfDay time) {
+    return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}:00';
+  }
+  
+  String _formatTimeFromString(String timeStr) {
+    try {
+      // Parse time string (HH:MM:SS or HH:MM)
+      final parts = timeStr.split(':');
+      if (parts.length >= 2) {
+        final hour = int.parse(parts[0]);
+        final minute = int.parse(parts[1]);
+        final hour12 = hour == 0 
+            ? 12 
+            : hour > 12 
+                ? hour - 12 
+                : hour;
+        final period = hour < 12 ? 'AM' : 'PM';
+        return '$hour12:${minute.toString().padLeft(2, '0')} $period';
+      }
+    } catch (e) {
+      print('Error formatting time: $e');
+    }
+    return timeStr;
   }
   
   Widget _buildSoundPreferenceField() {
@@ -1198,46 +1363,78 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
   }
   
   Future<void> _handleAddReminder() async {
-    if (!_formKey.currentState!.validate()) return;
+    // Validate form first
+    if (!_formKey.currentState!.validate()) {
+      print('❌ Form validation failed');
+      return;
+    }
     
-    if (_medicationNameController.text.isEmpty) {
+    // Check both the controller and the state variable
+    final medicationName = _medicationName.trim().isNotEmpty 
+        ? _medicationName.trim() 
+        : _medicationNameController.text.trim();
+    
+    if (medicationName.isEmpty) {
+      print('❌ Medication name is empty');
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Please enter a medication name')),
+        const SnackBar(
+          content: Text('Please enter a medication name'),
+          backgroundColor: Colors.red,
+        ),
       );
       return;
     }
     
+    // Ensure patientId is loaded
     if (_patientId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Patient ID not found. Please login again.')),
-      );
-      return;
+      print('⚠️ Patient ID not found, trying to load user info...');
+      await _loadUserInfo();
+      
+      if (_patientId == null) {
+        print('❌ Patient ID still not available after reload');
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Patient ID not found. Please login again.'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 3),
+          ),
+        );
+        return;
+      }
     }
     
     setState(() => _isMarking = true);
     
-    // Format time
-    final timeStr = '${_selectedTime.hour.toString().padLeft(2, '0')}:${_selectedTime.minute.toString().padLeft(2, '0')}:00';
+    // Format time as 24-hour format for backend (HH:MM:SS)
+    final timeStr = _formatTime24Hour(_selectedTime);
     
     final reminderData = {
-      'medication_name': _medicationNameController.text.trim(),
-      'dosage': _dosageController.text.trim(),
+      'medication_name': medicationName,
+      'dosage': _dosageController.text.trim().isEmpty ? null : _dosageController.text.trim(),
       'frequency': _selectedFrequency,
       'reminder_time': timeStr,
       'active': _isActive,
       'browser_notifications': _browserNotifications,
       'sound_preference': _selectedSoundPreference,
-      'special_instructions': _specialInstructionsController.text.trim(),
+      'special_instructions': _specialInstructionsController.text.trim().isEmpty 
+          ? null 
+          : _specialInstructionsController.text.trim(),
       'patient_id': _patientId,
-      if (_selectedPrescriptionId != null) 'prescription_id': _selectedPrescriptionId,
+      if (_selectedPrescriptionId != null && _selectedPrescriptionId!.isNotEmpty) 
+        'prescription_id': _selectedPrescriptionId,
     };
+    
+    print('📝 Creating reminder with data: $reminderData');
     
     try {
       final result = await ApiService.createMedicationReminder(reminderData);
       
+      print('📡 Create reminder response: ${result['success']}');
+      
       if (!mounted) return;
       
       if (result['success'] == true) {
+        print('✅ Reminder created successfully');
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Row(
@@ -1248,24 +1445,29 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
               ],
             ),
             backgroundColor: Colors.green,
+            duration: const Duration(seconds: 2),
           ),
         );
         Navigator.pop(context);
         await _loadReminders();
       } else {
+        print('❌ Failed to create reminder: ${result['message']}');
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(result['message'] ?? 'Failed to create reminder'),
             backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
           ),
         );
       }
     } catch (e) {
+      print('❌ Exception creating reminder: $e');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Error: ${e.toString()}'),
           backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
         ),
       );
     } finally {

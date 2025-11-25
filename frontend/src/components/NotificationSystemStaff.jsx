@@ -119,52 +119,69 @@ const NotificationSystemStaff = ({ socket }) => {
                 }
                 
                 // Validate appointments exist before showing notifications
-                // Filter out notifications for appointments that no longer exist
+                // Batch fetch all appointments at once instead of individual requests to avoid 404 spam
                 const token = getAuthToken();
-                const validationPromises = allNotifications.map(async (notif) => {
-                    // If notification has an appointment_id, verify it exists
-                    if (notif.appointment_id) {
-                        try {
-                            const appointmentResponse = await fetch(`${API_BASE_URL}/appointments/${notif.appointment_id}`, {
-                                headers: { Authorization: `Bearer ${token}` }
-                            });
-                            
-                            // Only include notification if appointment exists
-                            if (appointmentResponse.ok) {
-                                const appointmentData = await appointmentResponse.json();
-                                if (appointmentData.success && appointmentData.data) {
-                                    // Include appointment status in notification
-                                    return {
-                                        ...notif,
-                                        appointment: notif.appointment ? {
-                                            ...notif.appointment,
-                                            status: appointmentData.data.status
-                                        } : null,
-                                        appointment_status: appointmentData.data.status
-                                    };
-                                }
-                            } else if (appointmentResponse.status === 404) {
-                                // Appointment was deleted - this is expected, silently filter out
-                                return null;
+                const appointmentIds = allNotifications
+                    .filter(notif => notif.appointment_id)
+                    .map(notif => notif.appointment_id)
+                    .filter((id, index, self) => self.indexOf(id) === index); // Remove duplicates
+                
+                let validAppointments = {};
+                
+                // Batch fetch all appointments if there are any appointment IDs
+                if (appointmentIds.length > 0) {
+                    try {
+                        // Fetch all appointments at once using the list endpoint
+                        const appointmentsResponse = await fetch(`${API_BASE_URL}/appointments`, {
+                            headers: { Authorization: `Bearer ${token}` }
+                        });
+                        
+                        if (appointmentsResponse.ok) {
+                            const appointmentsData = await appointmentsResponse.json();
+                            if (appointmentsData.success && Array.isArray(appointmentsData.data)) {
+                                // Create a map of appointment_id -> appointment data for quick lookup
+                                appointmentsData.data.forEach(apt => {
+                                    validAppointments[apt.appointment_id] = apt;
+                                });
+                            }
+                        }
+                    } catch (error) {
+                        console.warn('Error batch fetching appointments for validation:', error.message);
+                        // Continue without validation if batch fetch fails
+                    }
+                }
+                
+                // Filter and enrich notifications with appointment data using the batch-fetched map
+                const validatedNotifications = allNotifications
+                    .map((notif) => {
+                        // If notification has an appointment_id, check if it exists in our batch fetch
+                        if (notif.appointment_id) {
+                            const appointment = validAppointments[notif.appointment_id];
+                            if (appointment) {
+                                // Appointment exists - include notification with updated status
+                                return {
+                                    ...notif,
+                                    appointment: notif.appointment ? {
+                                        ...notif.appointment,
+                                        status: appointment.status
+                                    } : {
+                                        appointment_id: appointment.appointment_id,
+                                        appointment_type: appointment.appointment_type,
+                                        scheduled_start: appointment.scheduled_start,
+                                        status: appointment.status
+                                    },
+                                    appointment_status: appointment.status
+                                };
                             } else {
-                                // Other error status (500, etc.) - log but still filter out
-                                console.warn(`Error validating appointment ${notif.appointment_id}: HTTP ${appointmentResponse.status}`);
+                                // Appointment not found in batch fetch - it was likely deleted/cancelled
+                                // Silently filter out (don't show notification for non-existent appointments)
                                 return null;
                             }
-                        } catch (error) {
-                            // Network error or other exception - log but filter out to be safe
-                            console.warn('Error validating appointment for notification:', error);
-                            return null;
                         }
-                    } else {
                         // No appointment_id, include notification as-is
                         return notif;
-                    }
-                });
-                
-                // Wait for all validations to complete in parallel
-                const validationResults = await Promise.all(validationPromises);
-                const validatedNotifications = validationResults.filter(notif => notif !== null);
+                    })
+                    .filter(notif => notif !== null);
                 
                 // Aggressive deduplication: keep only ONE notification per appointment_id
                 // Prefer in_app_messages (has message_id) over notifications table

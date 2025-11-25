@@ -111,6 +111,16 @@ class SocketService {
     }
   }
 
+  // Listen for medication reminder notifications
+  static void onMedicationReminder(Function(dynamic) callback) {
+    if (_socket != null) {
+      _socket!.on('medicationReminder', (data) {
+        print('💊 Medication reminder notification: $data');
+        callback(data);
+      });
+    }
+  }
+
   // Remove all listeners
   static void removeAllListeners() {
     if (_socket != null) {

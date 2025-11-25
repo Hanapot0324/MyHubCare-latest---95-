@@ -29,6 +29,10 @@ const MyAppointments = ({ socket }) => {
     
     // Day availability cache
     const [dayAvailability, setDayAvailability] = useState({});
+    
+    // Time slots for selected date
+    const [selectedDateSlots, setSelectedDateSlots] = useState([]);
+    const [selectedDateAppointments, setSelectedDateAppointments] = useState([]);
 
 
     // Get auth token
@@ -360,6 +364,75 @@ const MyAppointments = ({ socket }) => {
 
     const handleDayClick = (day) => {
         setSelectedDay(day);
+        // Fetch availability slots and appointments for the selected date
+        if (day) {
+            const dateStr = `${currentMonth.getFullYear()}-${String(currentMonth.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+            fetchAvailabilitySlotsForDate(dateStr);
+            fetchAppointmentsForDate(dateStr);
+        } else {
+            setSelectedDateSlots([]);
+            setSelectedDateAppointments([]);
+        }
+    };
+
+    // Fetch availability slots for a specific date (automatically fetch all slots for the date)
+    const fetchAvailabilitySlotsForDate = async (dateStr) => {
+        try {
+            const token = getAuthToken();
+            if (!token) return;
+
+            // Fetch all available slots for the date (no filters - show all)
+            const params = new URLSearchParams({ 
+                date: dateStr,
+                status: 'available' // Only show available slots
+            });
+
+            const response = await fetch(`${API_BASE_URL}/appointments/availability/slots?${params}`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                if (data.success) {
+                    // Filter to only show available slots (status = 'available')
+                    const availableSlots = (data.data || []).filter(slot => slot.slot_status === 'available');
+                    setSelectedDateSlots(availableSlots);
+                }
+            }
+        } catch (error) {
+            console.error('Error fetching availability slots:', error);
+        }
+    };
+
+    // Fetch appointments for a specific date (automatically fetch all appointments for the date)
+    const fetchAppointmentsForDate = async (dateStr) => {
+        try {
+            const token = getAuthToken();
+            if (!token) return;
+
+            // Fetch all appointments for the date (no filters - show all)
+            const params = new URLSearchParams({ 
+                date_from: dateStr,
+                date_to: dateStr
+            });
+
+            const response = await fetch(`${API_BASE_URL}/appointments?${params}`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                if (data.success) {
+                    // Filter to only show confirmed/scheduled appointments (not cancelled/no_show)
+                    const activeAppointments = (data.data || []).filter(apt => 
+                        apt.status !== 'cancelled' && apt.status !== 'no_show'
+                    );
+                    setSelectedDateAppointments(activeAppointments);
+                }
+            }
+        } catch (error) {
+            console.error('Error fetching appointments for date:', error);
+        }
     };
 
     // Store all appointments for calendar time indicators (without patient details)
@@ -705,6 +778,271 @@ const MyAppointments = ({ socket }) => {
             .join(' ');
     };
 
+    // Helper function to format time to "10:00 A.M" format
+    const formatTimeToAMPM = (time24) => {
+        if (!time24) return '';
+        const [hours, minutes] = time24.split(':');
+        const hour = parseInt(hours, 10);
+        const min = minutes || '00';
+        const period = hour >= 12 ? 'P.M' : 'A.M';
+        const hour12 = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
+        return `${hour12}:${min} ${period}`;
+    };
+
+    // Helper function to check if a time slot is booked
+    const isTimeSlotBooked = (slotStart, slotEnd) => {
+        const slotStartTime = new Date(`2000-01-01 ${slotStart}`);
+        const slotEndTime = new Date(`2000-01-01 ${slotEnd}`);
+        
+        return selectedDateAppointments.some(apt => {
+            const aptStart = new Date(apt.scheduled_start);
+            const aptEnd = new Date(apt.scheduled_end);
+            const aptStartTime = new Date(`2000-01-01 ${aptStart.toTimeString().slice(0, 8)}`);
+            const aptEndTime = new Date(`2000-01-01 ${aptEnd.toTimeString().slice(0, 8)}`);
+            
+            // Check if appointment overlaps with slot
+            return (aptStartTime < slotEndTime && aptEndTime > slotStartTime);
+        });
+    };
+
+    // Helper function to get time slot availability breakdown for a day
+    const getTimeSlotAvailability = (dateStr) => {
+        if (!selectedDateSlots.length || !dateStr) return [];
+
+        const availability = [];
+        
+        // Group slots by provider and facility
+        const groupedSlots = {};
+        selectedDateSlots.forEach(slot => {
+            const key = `${slot.provider_id || 'no-provider'}_${slot.facility_id}`;
+            if (!groupedSlots[key]) {
+                groupedSlots[key] = {
+                    provider_name: slot.provider_name || 'No Provider',
+                    facility_name: slot.facility_name || 'No Facility',
+                    provider_id: slot.provider_id,
+                    facility_id: slot.facility_id,
+                    slots: []
+                };
+            }
+            groupedSlots[key].slots.push(slot);
+        });
+
+        // Process each group
+        Object.values(groupedSlots).forEach(group => {
+            group.slots.forEach(slot => {
+                const slotStart = slot.start_time;
+                const slotEnd = slot.end_time;
+                
+                // Generate 30-minute intervals for this slot
+                const intervals = generateTimeIntervals(slotStart, slotEnd);
+                
+                intervals.forEach(interval => {
+                    const isBooked = isTimeSlotBooked(interval.start, interval.end);
+                    availability.push({
+                        start: interval.start,
+                        end: interval.end,
+                        isBooked: isBooked,
+                        provider_name: group.provider_name,
+                        facility_name: group.facility_name,
+                        provider_id: group.provider_id,
+                        facility_id: group.facility_id
+                    });
+                });
+            });
+        });
+
+        // Sort by start time
+        availability.sort((a, b) => a.start.localeCompare(b.start));
+        
+        return availability;
+    };
+
+    // Helper function to generate 30-minute time intervals from a slot
+    const generateTimeIntervals = (slotStart, slotEnd) => {
+        const intervals = [];
+        const start = new Date(`2000-01-01 ${slotStart}`);
+        const end = new Date(`2000-01-01 ${slotEnd}`);
+        
+        let current = new Date(start);
+        while (current < end) {
+            const intervalStart = new Date(current);
+            const intervalEnd = new Date(current.getTime() + 30 * 60000); // 30 minutes
+            
+            // Don't create interval if it goes beyond slot end
+            if (intervalEnd > end) {
+                break;
+            }
+            
+            intervals.push({
+                start: intervalStart.toTimeString().slice(0, 8),
+                end: intervalEnd.toTimeString().slice(0, 8)
+            });
+            
+            current = intervalEnd;
+        }
+        
+        return intervals;
+    };
+
+    // Render time slots view
+    const renderTimeSlotsView = () => {
+        if (!selectedDay || selectedDateSlots.length === 0) {
+            return (
+                <div style={{ 
+                    padding: '20px', 
+                    textAlign: 'center', 
+                    color: '#6c757d',
+                    background: '#f8f9fa',
+                    borderRadius: '4px'
+                }}>
+                    <p style={{ margin: 0, fontSize: '14px' }}>
+                        {selectedDay ? 'No availability slots found for this date. Please select a facility and provider.' : 'Select a date to view time slots'}
+                    </p>
+                </div>
+            );
+        }
+
+        // Group slots by provider and facility
+        const groupedSlots = {};
+        selectedDateSlots.forEach(slot => {
+            const key = `${slot.provider_id || 'no-provider'}_${slot.facility_id}`;
+            if (!groupedSlots[key]) {
+                groupedSlots[key] = {
+                    provider_name: slot.provider_name || 'No Provider',
+                    facility_name: slot.facility_name || 'No Facility',
+                    provider_id: slot.provider_id,
+                    facility_id: slot.facility_id,
+                    slots: []
+                };
+            }
+            groupedSlots[key].slots.push(slot);
+        });
+
+        // Sort slots by start time
+        Object.keys(groupedSlots).forEach(key => {
+            groupedSlots[key].slots.sort((a, b) => {
+                return a.start_time.localeCompare(b.start_time);
+            });
+        });
+
+        return (
+            <div style={{ marginBottom: '20px' }}>
+                {Object.values(groupedSlots).map((group, groupIndex) => {
+                    // Generate all time intervals from all slots in this group
+                    const allIntervals = [];
+                    group.slots.forEach(slot => {
+                        const intervals = generateTimeIntervals(slot.start_time, slot.end_time);
+                        intervals.forEach(interval => {
+                            allIntervals.push({
+                                ...interval,
+                                provider_id: group.provider_id,
+                                facility_id: group.facility_id,
+                                provider_name: group.provider_name,
+                                facility_name: group.facility_name
+                            });
+                        });
+                    });
+
+                    // Remove duplicate intervals (same time, same provider/facility)
+                    const uniqueIntervals = [];
+                    const seen = new Set();
+                    allIntervals.forEach(interval => {
+                        const key = `${interval.start}_${interval.end}_${interval.provider_id}_${interval.facility_id}`;
+                        if (!seen.has(key)) {
+                            seen.add(key);
+                            uniqueIntervals.push(interval);
+                        }
+                    });
+
+                    // Sort intervals by start time
+                    uniqueIntervals.sort((a, b) => a.start.localeCompare(b.start));
+
+                    return (
+                        <div key={groupIndex} style={{ marginBottom: '25px' }}>
+                            <div style={{ marginBottom: '12px', fontSize: '14px', fontWeight: 'bold', color: '#333' }}>
+                                {group.provider_name} - {group.facility_name}
+                            </div>
+                            <div style={{ 
+                                display: 'grid', 
+                                gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', 
+                                gap: '8px' 
+                            }}>
+                                {uniqueIntervals.map((interval, index) => {
+                                    const isBooked = isTimeSlotBooked(interval.start, interval.end);
+                                    
+                                    return (
+                                        <div
+                                            key={index}
+                                            onClick={() => {
+                                                if (!isBooked) {
+                                                    // Open booking modal with pre-filled time
+                                                    const dateStr = `${currentMonth.getFullYear()}-${String(currentMonth.getMonth() + 1).padStart(2, '0')}-${String(selectedDay).padStart(2, '0')}`;
+                                                    setShowAddModal(true);
+                                                    // Store selected slot info for modal
+                                                    // The modal will need to be updated to use this
+                                                }
+                                            }}
+                                            style={{
+                                                padding: '10px',
+                                                border: `2px solid ${isBooked ? '#dc3545' : '#28a745'}`,
+                                                borderRadius: '6px',
+                                                background: isBooked ? '#fff5f5' : '#f0fdf4',
+                                                cursor: isBooked ? 'not-allowed' : 'pointer',
+                                                textAlign: 'center',
+                                                transition: 'all 0.2s ease',
+                                                opacity: isBooked ? 0.7 : 1
+                                            }}
+                                            onMouseEnter={(e) => {
+                                                if (!isBooked) {
+                                                    e.currentTarget.style.transform = 'translateY(-2px)';
+                                                    e.currentTarget.style.boxShadow = '0 4px 8px rgba(0,0,0,0.1)';
+                                                    e.currentTarget.style.borderColor = '#22c55e';
+                                                }
+                                            }}
+                                            onMouseLeave={(e) => {
+                                                if (!isBooked) {
+                                                    e.currentTarget.style.transform = 'translateY(0)';
+                                                    e.currentTarget.style.boxShadow = 'none';
+                                                    e.currentTarget.style.borderColor = '#28a745';
+                                                }
+                                            }}
+                                            title={isBooked ? 'This time slot is already booked' : 'Click to book this time slot'}
+                                        >
+                                            <div style={{ 
+                                                fontSize: '12px', 
+                                                fontWeight: 'bold',
+                                                color: isBooked ? '#dc3545' : '#28a745',
+                                                marginBottom: '4px'
+                                            }}>
+                                                {formatTimeToAMPM(interval.start)}
+                                            </div>
+                                            <div style={{ 
+                                                fontSize: '11px', 
+                                                color: '#6c757d'
+                                            }}>
+                                                to {formatTimeToAMPM(interval.end)}
+                                            </div>
+                                            {isBooked && (
+                                                <div style={{ 
+                                                    fontSize: '10px', 
+                                                    color: '#dc3545',
+                                                    marginTop: '4px',
+                                                    fontWeight: 'bold'
+                                                }}>
+                                                    BOOKED
+                                                </div>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    );
+                })}
+            </div>
+        );
+    };
+
     const renderCalendar = () => {
         const daysInMonth = getDaysInMonth(currentMonth);
         const firstDayOfMonth = getFirstDayOfMonth(currentMonth);
@@ -835,8 +1173,113 @@ const MyAppointments = ({ socket }) => {
                             }
                         </div>
                     )}
-                    {/* Show green time indicators for all scheduled appointments (without patient names) */}
-                    {activeAppointments.length > 0 && (
+                    {/* Show time slot availability on selected day */}
+                    {isSelected && currentUserRole === 'patient' && selectedDateSlots.length > 0 && (() => {
+                        const dateStr = `${currentMonth.getFullYear()}-${String(currentMonth.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                        const timeSlots = getTimeSlotAvailability(dateStr);
+                        
+                        if (timeSlots.length === 0) return null;
+                        
+                        // Group consecutive intervals of the same status
+                        const groupedSlots = [];
+                        let currentGroup = null;
+                        
+                        timeSlots.forEach(slot => {
+                            if (!currentGroup || currentGroup.isBooked !== slot.isBooked || 
+                                currentGroup.provider_id !== slot.provider_id || 
+                                currentGroup.facility_id !== slot.facility_id) {
+                                // Start new group
+                                if (currentGroup) {
+                                    groupedSlots.push(currentGroup);
+                                }
+                                currentGroup = {
+                                    start: slot.start,
+                                    end: slot.end,
+                                    isBooked: slot.isBooked,
+                                    provider_id: slot.provider_id,
+                                    facility_id: slot.facility_id
+                                };
+                            } else {
+                                // Extend current group
+                                currentGroup.end = slot.end;
+                            }
+                        });
+                        if (currentGroup) {
+                            groupedSlots.push(currentGroup);
+                        }
+                        
+                        return (
+                            <div style={{
+                                marginTop: '5px',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '3px',
+                                maxHeight: '50px',
+                                overflowY: 'auto'
+                            }}>
+                                {groupedSlots.slice(0, 3).map((slot, idx) => (
+                                    <button
+                                        key={idx}
+                                        type="button"
+                                        onClick={(e) => {
+                                            e.stopPropagation(); // Prevent day selection when clicking button
+                                            if (!slot.isBooked) {
+                                                setShowAddModal(true);
+                                            }
+                                        }}
+                                        disabled={slot.isBooked}
+                                        style={{
+                                            border: `2px solid ${slot.isBooked ? '#dc3545' : '#28a745'}`,
+                                            borderRadius: '4px',
+                                            padding: '4px 6px',
+                                            fontSize: '8px',
+                                            background: slot.isBooked ? '#fff5f5' : '#28a745',
+                                            color: slot.isBooked ? '#dc3545' : 'white',
+                                            fontWeight: '600',
+                                            lineHeight: '1.2',
+                                            cursor: slot.isBooked ? 'not-allowed' : 'pointer',
+                                            transition: 'all 0.2s ease',
+                                            opacity: slot.isBooked ? 0.7 : 1,
+                                            boxShadow: slot.isBooked ? 'none' : '0 1px 2px rgba(0,0,0,0.1)'
+                                        }}
+                                        onMouseEnter={(e) => {
+                                            if (!slot.isBooked) {
+                                                e.currentTarget.style.background = '#22c55e';
+                                                e.currentTarget.style.borderColor = '#22c55e';
+                                                e.currentTarget.style.transform = 'scale(1.05)';
+                                            }
+                                        }}
+                                        onMouseLeave={(e) => {
+                                            if (!slot.isBooked) {
+                                                e.currentTarget.style.background = '#28a745';
+                                                e.currentTarget.style.borderColor = '#28a745';
+                                                e.currentTarget.style.transform = 'scale(1)';
+                                            }
+                                        }}
+                                        title={slot.isBooked ? 
+                                            `Booked: ${formatTimeToAMPM(slot.start)} to ${formatTimeToAMPM(slot.end)}` :
+                                            `Click to book: ${formatTimeToAMPM(slot.start)} to ${formatTimeToAMPM(slot.end)}`
+                                        }
+                                    >
+                                        {formatTimeToAMPM(slot.start)}-{formatTimeToAMPM(slot.end)}
+                                        {slot.isBooked ? ' 🔴' : ' 🟢'}
+                                    </button>
+                                ))}
+                                {groupedSlots.length > 3 && (
+                                    <div style={{
+                                        fontSize: '8px',
+                                        color: '#6c757d',
+                                        fontWeight: '600'
+                                    }}>
+                                        +{groupedSlots.length - 3} more
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })()}
+                    
+                    {/* Show green time indicators for all scheduled appointments (without patient names) - only if not showing slot availability */}
+                    {!(isSelected && currentUserRole === 'patient' && selectedDateSlots.length > 0) && activeAppointments.length > 0 && (
                         <div style={{
                             display: 'flex',
                             flexWrap: 'wrap',
@@ -1381,7 +1824,7 @@ const MyAppointments = ({ socket }) => {
                     </div>
                 </div>
 
-                {/* Right Column - Appointments List */}
+                {/* Right Column - Time Slots and Appointments List */}
                 <div style={{ 
                     background: 'white', 
                     padding: '20px', 
@@ -1391,20 +1834,156 @@ const MyAppointments = ({ socket }) => {
                     overflowY: 'auto',
                     minWidth: '280px'
                 }}>
-                    <div style={{ marginBottom: '20px' }}>
-                        <h3 style={{ margin: '0 0 10px 0', color: '#333' }}>
-                            {selectedDay ? (
-                                `Appointments for ${currentMonth.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}`
-                            ) : (
-                                'Select a date to view appointments'
-                            )}
-                        </h3>
-                        {selectedDay && (
-                            <p style={{ margin: 0, color: '#6c757d', fontSize: '14px' }}>
-                                {filteredAppointments.length} appointment{filteredAppointments.length !== 1 ? 's' : ''} scheduled
-                            </p>
-                        )}
-                    </div>
+                    {/* Time Slots View - Show at the top automatically */}
+                    {selectedDay && currentUserRole === 'patient' && (() => {
+                        const dateStr = `${currentMonth.getFullYear()}-${String(currentMonth.getMonth() + 1).padStart(2, '0')}-${String(selectedDay).padStart(2, '0')}`;
+                        const timeSlots = getTimeSlotAvailability(dateStr);
+                        
+                        if (timeSlots.length === 0 && selectedDateSlots.length === 0) {
+                            return null; // Don't show if no slots available
+                        }
+                        
+                        // Group by provider and facility
+                        const groupedByProvider = {};
+                        timeSlots.forEach(slot => {
+                            const key = `${slot.provider_id || 'no-provider'}_${slot.facility_id}`;
+                            if (!groupedByProvider[key]) {
+                                groupedByProvider[key] = {
+                                    provider_name: slot.provider_name,
+                                    facility_name: slot.facility_name,
+                                    slots: []
+                                };
+                            }
+                            groupedByProvider[key].slots.push(slot);
+                        });
+                        
+                        return (
+                            <div style={{ marginBottom: '30px', padding: '15px', background: '#f8f9fa', borderRadius: '8px' }}>
+                                <h4 style={{ margin: '0 0 15px 0', color: '#333', fontSize: '16px', fontWeight: 'bold' }}>
+                                    Time Slot Availability
+                                </h4>
+
+                                {/* Show grouped time slots */}
+                                {Object.keys(groupedByProvider).length > 0 ? (
+                                    Object.values(groupedByProvider).map((group, groupIndex) => {
+                                        // Group consecutive intervals of the same status
+                                        const groupedSlots = [];
+                                        let currentGroup = null;
+                                        
+                                        group.slots.forEach(slot => {
+                                            if (!currentGroup || currentGroup.isBooked !== slot.isBooked) {
+                                                if (currentGroup) {
+                                                    groupedSlots.push(currentGroup);
+                                                }
+                                                currentGroup = {
+                                                    start: slot.start,
+                                                    end: slot.end,
+                                                    isBooked: slot.isBooked
+                                                };
+                                            } else {
+                                                currentGroup.end = slot.end;
+                                            }
+                                        });
+                                        if (currentGroup) {
+                                            groupedSlots.push(currentGroup);
+                                        }
+                                        
+                                        return (
+                                            <div key={groupIndex} style={{ marginBottom: '20px' }}>
+                                                <div style={{ marginBottom: '10px', fontSize: '14px', fontWeight: 'bold', color: '#333' }}>
+                                                    {group.provider_name} - {group.facility_name}
+                                                </div>
+                                                <div style={{ 
+                                                    display: 'grid', 
+                                                    gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', 
+                                                    gap: '8px' 
+                                                }}>
+                                                {groupedSlots.map((slot, idx) => (
+                                                    <button
+                                                        key={idx}
+                                                        type="button"
+                                                        onClick={() => {
+                                                            if (!slot.isBooked) {
+                                                                setShowAddModal(true);
+                                                            }
+                                                        }}
+                                                        disabled={slot.isBooked}
+                                                        style={{
+                                                            padding: '12px',
+                                                            border: `2px solid ${slot.isBooked ? '#dc3545' : '#28a745'}`,
+                                                            borderRadius: '6px',
+                                                            background: slot.isBooked ? '#fff5f5' : '#28a745',
+                                                            color: slot.isBooked ? '#dc3545' : 'white',
+                                                            cursor: slot.isBooked ? 'not-allowed' : 'pointer',
+                                                            textAlign: 'center',
+                                                            transition: 'all 0.2s ease',
+                                                            opacity: slot.isBooked ? 0.7 : 1,
+                                                            fontWeight: '600',
+                                                            fontSize: '13px',
+                                                            boxShadow: slot.isBooked ? 'none' : '0 2px 4px rgba(0,0,0,0.1)',
+                                                            width: '100%'
+                                                        }}
+                                                        onMouseEnter={(e) => {
+                                                            if (!slot.isBooked) {
+                                                                e.currentTarget.style.transform = 'translateY(-2px)';
+                                                                e.currentTarget.style.boxShadow = '0 4px 8px rgba(0,0,0,0.1)';
+                                                                e.currentTarget.style.background = '#22c55e';
+                                                                e.currentTarget.style.borderColor = '#22c55e';
+                                                            }
+                                                        }}
+                                                        onMouseLeave={(e) => {
+                                                            if (!slot.isBooked) {
+                                                                e.currentTarget.style.transform = 'translateY(0)';
+                                                                e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)';
+                                                                e.currentTarget.style.background = '#28a745';
+                                                                e.currentTarget.style.borderColor = '#28a745';
+                                                            }
+                                                        }}
+                                                        title={slot.isBooked ? 'This time slot is already booked' : 'Click to book this time slot'}
+                                                    >
+                                                        <div style={{ 
+                                                            fontSize: '14px', 
+                                                            fontWeight: 'bold',
+                                                            marginBottom: '4px'
+                                                        }}>
+                                                            {formatTimeToAMPM(slot.start)}
+                                                        </div>
+                                                        <div style={{ 
+                                                            fontSize: '12px',
+                                                            opacity: 0.9
+                                                        }}>
+                                                            to {formatTimeToAMPM(slot.end)}
+                                                        </div>
+                                                        {slot.isBooked && (
+                                                            <div style={{ 
+                                                                fontSize: '10px',
+                                                                marginTop: '4px',
+                                                                fontWeight: 'bold',
+                                                                opacity: 0.8
+                                                            }}>
+                                                                BOOKED
+                                                            </div>
+                                                        )}
+                                                    </button>
+                                                ))}
+                                                </div>
+                                            </div>
+                                        );
+                                    })
+                                ) : (
+                                    <div style={{ 
+                                        padding: '20px', 
+                                        textAlign: 'center', 
+                                        color: '#6c757d',
+                                        fontSize: '14px'
+                                    }}>
+                                        No availability slots found for this date
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })()}
+
                     {loading ? (
                         <div style={{ textAlign: 'center', padding: '40px', color: '#6c757d' }}>
                             Loading appointments...

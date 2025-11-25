@@ -40,6 +40,7 @@ import AuditTrail from './components/AuditTrail.jsx';
 import Education from './components/Education.jsx';
 import PatientSurvey from './components/PatientSurvey.jsx';
 import SurveyMetrics from './components/SurveyMetrics.jsx';
+import AvailabilitySlots from './components/AvailabilitySlots.jsx';
 import ProtectedRoute from './components/ProtectedRoute.jsx';
 import { SOCKET_URL } from './config/api';
 
@@ -134,6 +135,14 @@ export default function App() {
             element={
               <MainLayout socket={socket}>
                 <Appointments socket={socket} />
+              </MainLayout>
+            }
+          />
+          <Route
+            path="/availability-slots"
+            element={
+              <MainLayout socket={socket}>
+                <AvailabilitySlots socket={socket} />
               </MainLayout>
             }
           />

@@ -915,6 +915,100 @@ export async function notifyAppointmentPatientConfirmed(appointment) {
   }
 }
 
+// Helper function to notify patient that appointment is confirmed when accepted into slot
+export async function notifyAppointmentSlotConfirmed(appointment) {
+  try {
+    const { appointment_id, patient_id, provider_id, facility_id, scheduled_start, appointment_type } = appointment;
+    
+    // Get patient name
+    const [patients] = await db.query(
+      'SELECT first_name, last_name FROM patients WHERE patient_id = ?',
+      [patient_id]
+    );
+    const patientName = patients.length > 0 
+      ? `${patients[0].first_name} ${patients[0].last_name}`
+      : 'Patient';
+
+    // Get facility name
+    const [facilities] = await db.query(
+      'SELECT facility_name FROM facilities WHERE facility_id = ?',
+      [facility_id]
+    );
+    const facilityName = facilities.length > 0 ? facilities[0].facility_name : 'Facility';
+
+    // Get provider name
+    let providerName = 'Provider';
+    if (provider_id) {
+      const [providers] = await db.query(
+        'SELECT full_name FROM users WHERE user_id = ?',
+        [provider_id]
+      );
+      if (providers.length > 0) {
+        providerName = providers[0].full_name;
+      }
+    }
+
+    const appointmentDate = new Date(scheduled_start);
+    const formattedDate = appointmentDate.toLocaleDateString('en-US', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+
+    const subject = `Appointment Confirmed`;
+    const body = `Your ${appointment_type.replace('_', ' ')} appointment with ${providerName} at ${facilityName} on ${formattedDate} has been confirmed.`;
+    
+    const payload = {
+      type: 'appointment_confirmed',
+      appointment_id,
+      patient_id,
+      provider_id,
+      provider_name: providerName,
+      facility_id,
+      scheduled_start,
+      appointment_type,
+      requires_confirmation: false // No confirmation needed - already confirmed
+    };
+
+    const notifications = [];
+
+    // Get patient's user_id if they have an account
+    const [patientUsers] = await db.query(`
+      SELECT u.user_id 
+      FROM patients p
+      LEFT JOIN users u ON p.created_by = u.user_id OR p.email = u.email
+      WHERE p.patient_id = ?
+      LIMIT 1
+    `, [patient_id]);
+
+    if (patientUsers.length > 0) {
+      const patientUserId = patientUsers[0].user_id;
+      
+      // In-app message for patient
+      const patientMessage = await createInAppMessage({
+        sender_id: null, // System message
+        recipient_id: patientUserId,
+        recipient_type: 'user',
+        subject,
+        body,
+        payload,
+        priority: 'high'
+      });
+      notifications.push(patientMessage);
+
+      // Socket notification will be emitted by the calling route if needed
+    }
+
+    return { success: true, notifications };
+  } catch (error) {
+    console.error('Error notifying appointment slot confirmation:', error);
+    return { success: false, error: error.message };
+  }
+}
+
 // GET /api/notifications - Get user's notifications
 router.get('/', authenticateToken, async (req, res) => {
   try {

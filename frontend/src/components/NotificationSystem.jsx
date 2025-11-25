@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Bell, Calendar, Check, XCircle } from 'lucide-react';
+import { X, Bell, Calendar } from 'lucide-react';
 import { API_BASE_URL } from '../config/api';
 
 const NotificationSystem = ({ socket }) => {
@@ -12,7 +12,6 @@ const NotificationSystem = ({ socket }) => {
     const [selectedAppointment, setSelectedAppointment] = useState(null);
     const [selectedNotification, setSelectedNotification] = useState(null);
     const [loadingAppointment, setLoadingAppointment] = useState(false);
-    const [processingAction, setProcessingAction] = useState(null);
 
     // Get auth token
     const getAuthToken = () => {
@@ -403,35 +402,7 @@ const NotificationSystem = ({ socket }) => {
         setNotifications(prev => prev.filter(n => n.id !== id));
     };
 
-    // Handle appointment confirmation (accept/decline) for physicians and nurses
-    const handleAppointmentAction = async (appointmentId, action, reason = null) => {
-        setProcessingAction(appointmentId);
-        try {
-            const token = getAuthToken();
-            const response = await fetch(`${API_BASE_URL}/appointments/${appointmentId}/${action}`, {
-                method: 'POST',
-                headers: {
-                    Authorization: `Bearer ${token}`,
-                    'Content-Type': 'application/json'
-                },
-                body: action === 'decline' ? JSON.stringify({ reason: reason || 'No reason provided' }) : undefined
-            });
-
-            const data = await response.json();
-            
-            if (data.success) {
-                await fetchNotifications();
-                alert(action === 'accept' ? 'Appointment accepted successfully' : 'Appointment declined');
-            } else {
-                alert(data.message || `Failed to ${action} appointment`);
-            }
-        } catch (error) {
-            console.error(`Error ${action}ing appointment:`, error);
-            alert(`Error ${action}ing appointment: ${error.message}`);
-        } finally {
-            setProcessingAction(null);
-        }
-    };
+    // Note: Accept/Decline functionality removed - appointments are now automatically assigned to availability slots
 
     const handleNotificationClick = async (notification) => {
         console.log('Notification clicked:', notification);
@@ -601,30 +572,6 @@ const NotificationSystem = ({ socket }) => {
                             ) : (
                                 notifications.map((notification) => {
                                     const isClickable = true; // All notifications are clickable now
-                                    // Show Accept/Decline buttons for physicians and nurses when requires_confirmation is true
-                                    // But disable if appointment is already accepted/confirmed (not 'scheduled' - that's the initial state)
-                                    const appointmentStatus = notification.appointment_status || notification.appointment?.status;
-                                    const isAppointmentFinalized = appointmentStatus === 'accepted' || 
-                                                                   appointmentStatus === 'confirmed';
-                                    const requiresAction = (currentUserRole === 'physician' || currentUserRole === 'nurse') &&
-                                                          notification.requires_confirmation && 
-                                                          notification.appointment_id &&
-                                                          (notification.type === 'appointment' || notification.type === 'appointment_created') &&
-                                                          !isAppointmentFinalized;
-                                    
-                                    // Debug logging for Accept/Decline button visibility
-                                    if (notification.appointment_id && (currentUserRole === 'physician' || currentUserRole === 'nurse')) {
-                                        console.log('[NotificationSystem] Button visibility check:', {
-                                            notification_id: notification.id,
-                                            currentUserRole,
-                                            requires_confirmation: notification.requires_confirmation,
-                                            appointment_id: notification.appointment_id,
-                                            notification_type: notification.type,
-                                            appointment_status: appointmentStatus,
-                                            isAppointmentFinalized,
-                                            requiresAction
-                                        });
-                                    }
                                     
                                     return (
                                     <div
@@ -727,60 +674,6 @@ const NotificationSystem = ({ socket }) => {
                                                     <div>
                                                         <strong>Time:</strong> {new Date(notification.appointment.scheduled_start).toLocaleTimeString()}
                                                     </div>
-                                                    </div>
-                                                )}
-                                                {/* Accept/Decline buttons for physicians and nurses */}
-                                                {requiresAction && (
-                                                    <div style={{ marginTop: '12px', display: 'flex', gap: '8px' }}>
-                                                        <button
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                handleAppointmentAction(notification.appointment_id, 'accept');
-                                                            }}
-                                                            disabled={processingAction === notification.appointment_id || isAppointmentFinalized}
-                                                            style={{
-                                                                padding: '6px 12px',
-                                                                background: (processingAction === notification.appointment_id || isAppointmentFinalized) ? '#9ca3af' : '#10b981',
-                                                                color: 'white',
-                                                                border: 'none',
-                                                                borderRadius: '6px',
-                                                                cursor: (processingAction === notification.appointment_id || isAppointmentFinalized) ? 'not-allowed' : 'pointer',
-                                                                fontSize: '12px',
-                                                                fontWeight: '600',
-                                                                display: 'flex',
-                                                                alignItems: 'center',
-                                                                gap: '4px',
-                                                            }}
-                                                        >
-                                                            <Check size={14} />
-                                                            Accept
-                                                        </button>
-                                                        <button
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                const reason = prompt('Please provide a reason for declining:');
-                                                                if (reason !== null) {
-                                                                    handleAppointmentAction(notification.appointment_id, 'decline', reason);
-                                                                }
-                                                            }}
-                                                            disabled={processingAction === notification.appointment_id || isAppointmentFinalized}
-                                                            style={{
-                                                                padding: '6px 12px',
-                                                                background: (processingAction === notification.appointment_id || isAppointmentFinalized) ? '#9ca3af' : '#ef4444',
-                                                                color: 'white',
-                                                                border: 'none',
-                                                                borderRadius: '6px',
-                                                                cursor: (processingAction === notification.appointment_id || isAppointmentFinalized) ? 'not-allowed' : 'pointer',
-                                                                fontSize: '12px',
-                                                                fontWeight: '600',
-                                                                display: 'flex',
-                                                                alignItems: 'center',
-                                                                gap: '4px',
-                                                            }}
-                                                        >
-                                                            <XCircle size={14} />
-                                                            Decline
-                                                        </button>
                                                     </div>
                                                 )}
                                                 {/* Read/Unread toggle button */}

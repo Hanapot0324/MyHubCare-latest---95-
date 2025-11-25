@@ -41,6 +41,7 @@ import {
   Warning as AlertsIcon,
   LocalShipping as SuppliersIcon,
   ShoppingCart as OrdersIcon,
+  Schedule as ScheduleIcon,
 } from '@mui/icons-material';
 import { Collapse } from '@mui/material';
 import { PillIcon } from 'lucide-react';
@@ -52,6 +53,7 @@ const allMenuItems = [
   { text: 'Dashboard', icon: <DashboardIcon />, path: '/dashboard', roles: ['admin', 'physician', 'nurse', 'case_manager', 'lab_personnel', 'patient'] },
   { text: 'Patients', icon: <PersonIcon />, path: '/patient', roles: ['admin', 'physician', 'nurse', 'case_manager'] },
   { text: 'Appointments', icon: <CalendarIcon />, path: '/appointments', roles: ['admin', 'physician', 'nurse', 'case_manager'] },
+  { text: 'Availability Slots', icon: <ScheduleIcon />, path: '/availability-slots', roles: ['admin', 'physician', 'case_manager'] },
   { text: 'My Appointments', icon: <CalendarIcon />, path: '/my-appointments', roles: ['patient'] },
   { text: 'Profile', icon: <PersonIcon />, path: '/profile', roles: ['patient'] },
   { text: 'Clinical Visit', icon: <MedicalServicesIcon />, path: '/clinical-visit', roles: ['admin', 'physician', 'nurse', 'case_manager'] },

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import '../services/api_service.dart';
+import '../services/socket_service.dart';
 import 'appointments_screen.dart';
 import 'medications_screen.dart';
 import 'prescriptions_screen.dart';
@@ -26,6 +27,32 @@ class _DashboardState extends State<Dashboard> {
   void initState() {
     super.initState();
     _loadUserData();
+    _initializeSocket();
+  }
+
+  Future<void> _initializeSocket() async {
+    try {
+      // Initialize socket connection
+      await SocketService.initialize();
+      
+      // Get user ID and join rooms after user data is loaded
+      final prefs = await SharedPreferences.getInstance();
+      final userStr = prefs.getString('user');
+      if (userStr != null) {
+        final user = jsonDecode(userStr);
+        final userId = user['user_id']?.toString();
+        final patientId = user['patient_id']?.toString();
+        
+        if (userId != null) {
+          SocketService.joinUserRoom(userId);
+        }
+        if (patientId != null) {
+          SocketService.joinPatientRoom(patientId);
+        }
+      }
+    } catch (e) {
+      print('Error initializing socket: $e');
+    }
   }
 
   Future<void> _loadUserData() async {

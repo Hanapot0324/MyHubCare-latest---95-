@@ -43,7 +43,8 @@ import userFacilityAssignmentsRoutes from './routes/user-facility-assignments.js
 import auditLogsRoutes from './routes/audit-logs.js';
 import surveyResponsesRoutes from './routes/survey-responses.js';
 import surveyMetricsRoutes from './routes/survey-metrics.js';
-import { processAppointmentReminders } from './services/reminderService.js';
+import artRegimensRoutes from './routes/art-regimens.js';
+import { processAppointmentReminders, processMedicationReminders, setSocketIO as setReminderServiceSocketIO } from './services/reminderService.js';
 
 const app = express();
 const server = http.createServer(app);
@@ -65,6 +66,8 @@ const io = new Server(server, {
 
 // Set Socket.IO instance for appointments route
 setSocketIO(io);
+// Set Socket.IO instance for reminder service
+setReminderServiceSocketIO(io);
 
 app.use(cors({
   origin: function (origin, callback) {
@@ -120,6 +123,7 @@ app.use('/api/user-facility-assignments', userFacilityAssignmentsRoutes);
 app.use('/api/audit-logs', auditLogsRoutes);
 app.use('/api/survey-responses', surveyResponsesRoutes);
 app.use('/api/survey-metrics', surveyMetricsRoutes);
+app.use('/api/art-regimens', artRegimensRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -170,11 +174,16 @@ server.listen(PORT, HOST, () => {
   // Start reminder processing interval (every minute)
   setInterval(async () => {
     try {
+      // Process appointment reminders
       await processAppointmentReminders();
+      // Process medication reminders (Module 13)
+      await processMedicationReminders();
     } catch (error) {
       console.error('Error processing reminders:', error);
     }
   }, 60000); // Run every 60 seconds (1 minute)
   
   console.log('⏰ Reminder service started (checking every minute)');
+  console.log('   - Appointment reminders: ✅');
+  console.log('   - Medication reminders: ✅');
 });

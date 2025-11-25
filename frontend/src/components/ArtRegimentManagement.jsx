@@ -13,11 +13,12 @@ import {
   Clock,
   Activity,
 } from 'lucide-react';
+import { API_BASE_URL } from '../config/api.js';
 
 const ARTRegimenManagement = () => {
   const [regimens, setRegimens] = useState([]);
   const [patients, setPatients] = useState([]);
-  const [inventory, setInventory] = useState([]);
+  const [medications, setMedications] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
   const [showModal, setShowModal] = useState(false);
@@ -25,101 +26,89 @@ const ARTRegimenManagement = () => {
   const [modalMode, setModalMode] = useState('add'); // 'add', 'view', 'stop'
   const [toast, setToast] = useState(null);
   const [drugItems, setDrugItems] = useState([{}]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
-  // Dummy data
+  // Fetch data from API
   useEffect(() => {
-    // Dummy patients
-    const dummyPatients = [
-      { id: 1, firstName: 'John', lastName: 'Doe' },
-      { id: 2, firstName: 'Maria', lastName: 'Santos' },
-      { id: 3, firstName: 'Carlos', lastName: 'Rodriguez' },
-      { id: 4, firstName: 'Ana', lastName: 'Lopez' },
-      { id: 5, firstName: 'Roberto', lastName: 'Garcia' },
-    ];
-
-    // Dummy inventory
-    const dummyInventory = [
-      { id: 1, drugName: 'Tenofovir/Lamivudine/Dolutegravir (TLD)' },
-      { id: 2, drugName: 'Efavirenz 600mg' },
-      { id: 3, drugName: 'Atazanavir 300mg' },
-      { id: 4, drugName: 'Ritonavir 100mg' },
-      { id: 5, drugName: 'Cotrimoxazole 960mg' },
-    ];
-
-    // Dummy regimens
-    const dummyRegimens = [
-      {
-        id: 1,
-        patientId: 1,
-        startDate: '2025-01-15',
-        stopDate: null,
-        status: 'active',
-        drugs: [
-          {
-            drugName: 'Tenofovir/Lamivudine/Dolutegravir (TLD)',
-            dose: '1 tablet',
-            pillsPerDay: 1,
-            pillsDispensed: 30,
-            pillsRemaining: 15,
-            missedDoses: 2,
-          },
-        ],
-        notes: 'Patient responding well to treatment',
-        createdAt: '2025-01-15T10:00:00Z',
-      },
-      {
-        id: 2,
-        patientId: 2,
-        startDate: '2025-02-20',
-        stopDate: null,
-        status: 'active',
-        drugs: [
-          {
-            drugName: 'Efavirenz 600mg',
-            dose: '1 tablet',
-            pillsPerDay: 1,
-            pillsDispensed: 30,
-            pillsRemaining: 10,
-            missedDoses: 1,
-          },
-          {
-            drugName: 'Tenofovir/Lamivudine',
-            dose: '1 tablet',
-            pillsPerDay: 1,
-            pillsDispensed: 30,
-            pillsRemaining: 12,
-            missedDoses: 0,
-          },
-        ],
-        notes: 'Monthly refill',
-        createdAt: '2025-02-20T14:30:00Z',
-      },
-      {
-        id: 3,
-        patientId: 3,
-        startDate: '2024-12-10',
-        stopDate: '2025-03-15',
-        status: 'changed',
-        drugs: [
-          {
-            drugName: 'Atazanavir 300mg',
-            dose: '2 tablets',
-            pillsPerDay: 2,
-            pillsDispensed: 60,
-            pillsRemaining: 0,
-            missedDoses: 5,
-          },
-        ],
-        notes: 'Changed to TLD due to side effects',
-        stopReason: 'Adverse reaction',
-        createdAt: '2024-12-10T09:00:00Z',
-      },
-    ];
-
-    setPatients(dummyPatients);
-    setInventory(dummyInventory);
-    setRegimens(dummyRegimens);
+    fetchData();
   }, []);
+
+  const fetchData = async () => {
+    setLoading(true);
+    setError(null);
+    const token = localStorage.getItem('token');
+
+    if (!token) {
+      setError('Authentication required. Please log in.');
+      setLoading(false);
+      return;
+    }
+
+    try {
+      // Fetch regimens
+      const regimensResponse = await fetch(`${API_BASE_URL}/art-regimens`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (regimensResponse.ok) {
+        const regimensData = await regimensResponse.json();
+        if (regimensData.success) {
+          setRegimens(regimensData.data || []);
+        }
+      } else {
+        console.warn('Failed to fetch regimens:', regimensResponse.status);
+      }
+
+      // Fetch patients
+      const patientsResponse = await fetch(`${API_BASE_URL}/patients?status=active`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      
+      if (patientsResponse.ok) {
+        const patientsData = await patientsResponse.json();
+        if (patientsData.success) {
+          // Backend returns { success: true, patients: [...] }
+          const patientsList = patientsData.patients || patientsData.data || [];
+          setPatients(patientsList);
+          console.log('Patients fetched:', patientsList.length);
+        } else {
+          console.warn('Patients API returned success=false:', patientsData.message);
+        }
+      } else {
+        const errorData = await patientsResponse.json().catch(() => ({}));
+        console.error('Failed to fetch patients:', patientsResponse.status, errorData);
+        setError(`Failed to load patients: ${errorData.message || 'Access denied or server error'}`);
+      }
+
+      // Fetch ART medications
+      const medicationsResponse = await fetch(`${API_BASE_URL}/medications?is_art=true&active=true`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (medicationsResponse.ok) {
+        const medicationsData = await medicationsResponse.json();
+        if (medicationsData.success) {
+          setMedications(medicationsData.data || []);
+        }
+      } else {
+        console.warn('Failed to fetch medications:', medicationsResponse.status);
+      }
+    } catch (err) {
+      console.error('Error fetching data:', err);
+      setError('Failed to load data. Please refresh the page.');
+      setToast({
+        message: 'Failed to load data. Please refresh the page.',
+        type: 'error',
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // Auto-hide toast after 3 seconds
   useEffect(() => {
@@ -155,26 +144,86 @@ const ARTRegimenManagement = () => {
   };
 
   // Show add regimen modal
-  const handleShowAddRegimenModal = () => {
+  const handleShowAddRegimenModal = async () => {
     setSelectedRegimen(null);
     setModalMode('add');
     setDrugItems([{}]);
+    
+    // If patients are not loaded, try to fetch them
+    if (patients.length === 0) {
+      await fetchPatients();
+    }
+    
     setShowModal(true);
   };
 
+  // Fetch patients separately
+  const fetchPatients = async () => {
+    const token = localStorage.getItem('token');
+    if (!token) return;
+
+    try {
+      const patientsResponse = await fetch(`${API_BASE_URL}/patients?status=active`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      
+      if (patientsResponse.ok) {
+        const patientsData = await patientsResponse.json();
+        if (patientsData.success) {
+          // Backend returns { success: true, patients: [...] }
+          const patientsList = patientsData.patients || patientsData.data || [];
+          setPatients(patientsList);
+          console.log('Patients fetched:', patientsList.length);
+        } else {
+          console.warn('Patients API returned success=false:', patientsData.message);
+        }
+      } else {
+        const errorData = await patientsResponse.json().catch(() => ({}));
+        console.error('Failed to fetch patients:', patientsResponse.status, errorData);
+        setToast({
+          message: `Failed to load patients: ${errorData.message || 'Access denied'}`,
+          type: 'error',
+        });
+      }
+    } catch (err) {
+      console.error('Error fetching patients:', err);
+    }
+  };
+
   // Show view regimen modal
-  const handleShowViewRegimenModal = (regimenId) => {
-    const regimen = regimens.find((r) => r.id === regimenId);
-    if (regimen) {
-      setSelectedRegimen(regimen);
-      setModalMode('view');
-      setShowModal(true);
+  const handleShowViewRegimenModal = async (regimenId) => {
+    const token = localStorage.getItem('token');
+    try {
+      const response = await fetch(`${API_BASE_URL}/art-regimens/${regimenId}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const data = await response.json();
+      if (response.ok && data.success) {
+        setSelectedRegimen(data.data);
+        setModalMode('view');
+        setShowModal(true);
+      } else {
+        setToast({
+          message: 'Failed to load regimen details',
+          type: 'error',
+        });
+      }
+    } catch (err) {
+      console.error('Error fetching regimen:', err);
+      setToast({
+        message: 'Failed to load regimen details',
+        type: 'error',
+      });
     }
   };
 
   // Show stop regimen modal
   const handleShowStopRegimenModal = (regimenId) => {
-    const regimen = regimens.find((r) => r.id === regimenId);
+    const regimen = regimens.find((r) => r.regimen_id === regimenId);
     if (regimen) {
       setSelectedRegimen(regimen);
       setModalMode('stop');
@@ -195,46 +244,116 @@ const ARTRegimenManagement = () => {
   };
 
   // Add regimen
-  const handleAddRegimen = (formData) => {
-    const newRegimen = {
-      id: regimens.length > 0 ? Math.max(...regimens.map((r) => r.id)) + 1 : 1,
-      patientId: parseInt(formData.patientId),
-      startDate: formData.startDate,
-      stopDate: null,
-      status: 'active',
-      drugs: formData.drugs,
-      notes: formData.notes,
-      createdAt: new Date().toISOString(),
-    };
+  const handleAddRegimen = async (formData) => {
+    const token = localStorage.getItem('token');
+    setError(null);
 
-    setRegimens([...regimens, newRegimen]);
-    setToast({
-      message: 'ART regimen started successfully',
-      type: 'success',
-    });
-    setShowModal(false);
+    try {
+      // Get current user info for provider_id and facility_id
+      const userResponse = await fetch(`${API_BASE_URL}/auth/me`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const userData = await userResponse.json();
+      const currentUser = userData.user;
+
+      // Prepare drugs array
+      const drugs = formData.drugs.map((drug) => ({
+        medication_id: drug.medication_id,
+        drug_name: drug.drugName,
+        dosage: drug.dose,
+        pills_per_day: parseInt(drug.pillsPerDay),
+        pills_dispensed: parseInt(drug.pillsDispensed) || 0,
+      }));
+
+      const response = await fetch(`${API_BASE_URL}/art-regimens`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          patient_id: formData.patientId,
+          provider_id: currentUser?.user_id,
+          facility_id: currentUser?.facility_id,
+          start_date: formData.startDate,
+          notes: formData.notes || null,
+          drugs: drugs,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        setToast({
+          message: 'ART regimen started successfully',
+          type: 'success',
+        });
+        setShowModal(false);
+        fetchData(); // Refresh data
+      } else {
+        throw new Error(data.message || 'Failed to start regimen');
+      }
+    } catch (err) {
+      console.error('Error adding regimen:', err);
+      setError(err.message);
+      setToast({
+        message: err.message || 'Failed to start ART regimen',
+        type: 'error',
+      });
+    }
   };
 
   // Stop regimen
-  const handleStopRegimen = (formData) => {
-    const updatedRegimens = regimens.map((regimen) =>
-      regimen.id === selectedRegimen.id
-        ? {
-            ...regimen,
-            status: formData.action,
-            stopDate: formData.stopDate,
-            stopReason: formData.stopReason,
-            updatedAt: new Date().toISOString(),
-          }
-        : regimen
-    );
+  const handleStopRegimen = async (formData) => {
+    const token = localStorage.getItem('token');
+    setError(null);
 
-    setRegimens(updatedRegimens);
-    setToast({
-      message: 'ART regimen updated successfully',
-      type: 'success',
-    });
-    setShowModal(false);
+    try {
+      const endpoint = formData.action === 'stopped' 
+        ? `${API_BASE_URL}/art-regimens/${selectedRegimen.regimen_id}/stop`
+        : `${API_BASE_URL}/art-regimens/${selectedRegimen.regimen_id}/change`;
+
+      const body = formData.action === 'stopped'
+        ? {
+            stop_date: formData.stopDate,
+            stop_reason: formData.stopReason,
+          }
+        : {
+            change_date: formData.stopDate,
+            change_reason: formData.stopReason,
+          };
+
+      const response = await fetch(endpoint, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(body),
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        setToast({
+          message: `ART regimen ${formData.action} successfully`,
+          type: 'success',
+        });
+        setShowModal(false);
+        fetchData(); // Refresh data
+      } else {
+        throw new Error(data.message || 'Failed to update regimen');
+      }
+    } catch (err) {
+      console.error('Error updating regimen:', err);
+      setError(err.message);
+      setToast({
+        message: err.message || 'Failed to update ART regimen',
+        type: 'error',
+      });
+    }
   };
 
   // Calculate days on ART
@@ -257,8 +376,8 @@ const ARTRegimenManagement = () => {
     }
 
     return filteredRegimens.map((regimen) => {
-      const patient = patients.find((p) => p.id === regimen.patientId);
-      const daysOnART = calculateDaysOnART(regimen.startDate, regimen.stopDate);
+      const patient = patients.find((p) => p.patient_id === regimen.patient_id);
+      const daysOnART = calculateDaysOnART(regimen.start_date, regimen.stop_date);
 
       let statusColor = '#28a745';
       if (regimen.status === 'stopped') statusColor = '#dc3545';
@@ -291,7 +410,7 @@ const ARTRegimenManagement = () => {
                   fontSize: '18px',
                 }}
               >
-                {patient ? `${patient.firstName} ${patient.lastName}` : 'N/A'}
+                {patient ? `${patient.first_name} ${patient.last_name}` : 'N/A'}
               </h3>
               <div
                 style={{
@@ -307,7 +426,7 @@ const ARTRegimenManagement = () => {
                   style={{ display: 'flex', alignItems: 'center', gap: '5px' }}
                 >
                   <Calendar size={14} />
-                  Started: {new Date(regimen.startDate).toLocaleDateString()}
+                  Started: {new Date(regimen.start_date).toLocaleDateString()}
                 </span>
                 <span
                   style={{ display: 'flex', alignItems: 'center', gap: '5px' }}
@@ -352,7 +471,7 @@ const ARTRegimenManagement = () => {
                   {regimen.status}
                 </span>
                 <button
-                  onClick={() => handleShowViewRegimenModal(regimen.id)}
+                  onClick={() => handleShowViewRegimenModal(regimen.regimen_id)}
                   style={{
                     padding: '6px 12px',
                     background: '#007bff',
@@ -367,7 +486,7 @@ const ARTRegimenManagement = () => {
                 </button>
                 {regimen.status === 'active' && (
                   <button
-                    onClick={() => handleShowStopRegimenModal(regimen.id)}
+                    onClick={() => handleShowStopRegimenModal(regimen.regimen_id)}
                     style={{
                       padding: '6px 12px',
                       background: '#ffc107',
@@ -496,8 +615,30 @@ const ARTRegimenManagement = () => {
         </div>
       </div>
 
+      {/* Loading State */}
+      {loading && (
+        <div style={{ textAlign: 'center', padding: '40px' }}>
+          <p style={{ color: '#6c757d' }}>Loading ART regimens...</p>
+        </div>
+      )}
+
+      {/* Error State */}
+      {error && !loading && (
+        <div style={{ 
+          background: '#f8d7da', 
+          color: '#721c24', 
+          padding: '15px', 
+          borderRadius: '8px', 
+          marginBottom: '20px' 
+        }}>
+          <strong>Error:</strong> {error}
+        </div>
+      )}
+
       {/* Regimen List */}
-      <div style={{ width: '100%' }}>{renderRegimenList()}</div>
+      {!loading && !error && (
+        <div style={{ width: '100%' }}>{renderRegimenList()}</div>
+      )}
 
       {/* Modal */}
       {showModal && (
@@ -505,7 +646,7 @@ const ARTRegimenManagement = () => {
           mode={modalMode}
           regimen={selectedRegimen}
           patients={patients}
-          inventory={inventory}
+          medications={medications}
           drugItems={drugItems}
           onClose={() => setShowModal(false)}
           onAdd={handleAddRegimen}
@@ -570,7 +711,7 @@ const RegimenModal = ({
   mode,
   regimen,
   patients,
-  inventory,
+  medications,
   drugItems,
   onClose,
   onAdd,
@@ -601,19 +742,19 @@ const RegimenModal = ({
       const drugs = [];
 
       drugElements.forEach((item) => {
+        const medicationId = item.querySelector('.medicationId')?.value;
         const drugName = item.querySelector('.drugName')?.value;
         const dose = item.querySelector('.dose')?.value;
         const pillsPerDay = item.querySelector('.pillsPerDay')?.value;
         const pillsDispensed = item.querySelector('.pillsDispensed')?.value;
 
-        if (drugName && dose && pillsPerDay) {
+        if (medicationId && drugName && dose && pillsPerDay) {
           drugs.push({
+            medication_id: medicationId,
             drugName,
             dose,
             pillsPerDay: parseInt(pillsPerDay),
             pillsDispensed: parseInt(pillsDispensed) || 0,
-            pillsRemaining: parseInt(pillsDispensed) || 0,
-            missedDoses: 0,
           });
         }
       });
@@ -642,7 +783,7 @@ const RegimenModal = ({
   };
 
   if (mode === 'view') {
-    const patient = patients.find((p) => p.id === regimen.patientId);
+    const patient = patients.find((p) => p.patient_id === regimen.patient_id);
 
     return (
       <div
@@ -708,7 +849,7 @@ const RegimenModal = ({
             <input
               type="text"
               value={
-                patient ? `${patient.firstName} ${patient.lastName}` : 'N/A'
+                patient ? `${patient.first_name} ${patient.last_name}` : 'N/A'
               }
               readOnly
               style={{
@@ -735,7 +876,7 @@ const RegimenModal = ({
               </label>
               <input
                 type="date"
-                value={regimen.startDate}
+                value={regimen.start_date}
                 readOnly
                 style={{
                   width: '100%',
@@ -788,7 +929,7 @@ const RegimenModal = ({
                 </label>
                 <input
                   type="date"
-                  value={regimen.stopDate}
+                  value={regimen.stop_date}
                   readOnly
                   style={{
                     width: '100%',
@@ -812,7 +953,7 @@ const RegimenModal = ({
                 </label>
                 <input
                   type="text"
-                  value={regimen.stopReason || 'N/A'}
+                  value={regimen.stop_reason || regimen.change_reason || 'N/A'}
                   readOnly
                   style={{
                     width: '100%',
@@ -838,7 +979,7 @@ const RegimenModal = ({
               }}
             >
               <h5 style={{ margin: '0 0 10px 0' }}>
-                {index + 1}. {drug.drugName}
+                {index + 1}. {drug.drug_name || drug.drugName}
               </h5>
               <div
                 style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}
@@ -856,7 +997,7 @@ const RegimenModal = ({
                   </label>
                   <input
                     type="text"
-                    value={drug.dose}
+                    value={drug.dosage || drug.dose}
                     readOnly
                     style={{
                       width: '100%',
@@ -880,7 +1021,7 @@ const RegimenModal = ({
                   </label>
                   <input
                     type="text"
-                    value={drug.pillsPerDay}
+                    value={drug.pills_per_day || drug.pillsPerDay}
                     readOnly
                     style={{
                       width: '100%',
@@ -906,7 +1047,7 @@ const RegimenModal = ({
                   </label>
                   <input
                     type="text"
-                    value={drug.pillsRemaining || 0}
+                    value={drug.pills_remaining || drug.pillsRemaining || 0}
                     readOnly
                     style={{
                       width: '100%',
@@ -930,7 +1071,7 @@ const RegimenModal = ({
                   </label>
                   <input
                     type="text"
-                    value={drug.missedDoses || 0}
+                    value={drug.missed_doses || drug.missedDoses || 0}
                     readOnly
                     style={{
                       width: '100%',
@@ -1230,20 +1371,42 @@ const RegimenModal = ({
               value={formData.patientId}
               onChange={handleChange}
               required
+              disabled={patients.length === 0}
               style={{
                 width: '100%',
                 padding: '8px',
                 border: '1px solid #ced4da',
                 borderRadius: '4px',
+                backgroundColor: patients.length === 0 ? '#f8f9fa' : 'white',
               }}
             >
-              <option value="">Select Patient</option>
-              {patients.map((patient) => (
-                <option key={patient.id} value={patient.id}>
-                  {patient.firstName} {patient.lastName}
+              <option value="">
+                {patients.length === 0 
+                  ? 'Loading patients...' 
+                  : 'Select Patient'}
+              </option>
+              {patients.length === 0 ? (
+                <option value="" disabled>
+                  No patients available. Please check your permissions or contact an administrator.
                 </option>
-              ))}
+              ) : (
+                patients.map((patient) => (
+                  <option key={patient.patient_id} value={patient.patient_id}>
+                    {patient.first_name} {patient.last_name} {patient.uic ? `(${patient.uic})` : ''}
+                  </option>
+                ))
+              )}
             </select>
+            {patients.length === 0 && (
+              <p style={{ 
+                marginTop: '5px', 
+                fontSize: '12px', 
+                color: '#dc3545',
+                fontStyle: 'italic'
+              }}>
+                Unable to load patients. Make sure you have the required permissions (admin, physician, nurse, or case_manager).
+              </p>
+            )}
           </div>
 
           <div style={{ marginBottom: '15px' }}>
@@ -1314,8 +1477,14 @@ const RegimenModal = ({
                     Drug Name <span style={{ color: 'red' }}>*</span>
                   </label>
                   <select
-                    className="drugName"
+                    className="medicationId"
                     required
+                    onChange={(e) => {
+                      const selectedMed = medications.find(m => m.medication_id === e.target.value);
+                      if (selectedMed) {
+                        e.target.closest('.drug-item').querySelector('.drugName').value = selectedMed.medication_name;
+                      }
+                    }}
                     style={{
                       width: '100%',
                       padding: '8px',
@@ -1323,13 +1492,17 @@ const RegimenModal = ({
                       borderRadius: '4px',
                     }}
                   >
-                    <option value="">Select Drug</option>
-                    {inventory.map((item) => (
-                      <option key={item.id} value={item.drugName}>
-                        {item.drugName}
+                    <option value="">Select Medication</option>
+                    {medications.map((med) => (
+                      <option key={med.medication_id} value={med.medication_id}>
+                        {med.medication_name} {med.generic_name ? `(${med.generic_name})` : ''}
                       </option>
                     ))}
                   </select>
+                  <input
+                    type="hidden"
+                    className="drugName"
+                  />
                 </div>
                 <div
                   style={{ display: 'flex', gap: '10px', marginBottom: '15px' }}

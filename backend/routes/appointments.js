@@ -569,8 +569,10 @@ router.post('/', authenticateToken, async (req, res) => {
     if (hasSlotsDefined) {
       // Only enforce slot checking if slots are defined
       if (!selectedSlotId) {
+        // Find a slot where the appointment time fits within the slot time boundaries
+        // Appointment must start >= slot start AND appointment must end <= slot end
         let availabilityQuery = `
-          SELECT slot_id
+          SELECT slot_id, start_time, end_time
           FROM availability_slots
           WHERE facility_id = ? 
             AND slot_date = ?
@@ -578,28 +580,44 @@ router.post('/', authenticateToken, async (req, res) => {
             AND end_time >= ?
             AND slot_status = 'available'
         `;
-        const availabilityParams = [facility_id, slotDate, endTime, startTime];
+        const availabilityParams = [facility_id, slotDate, startTime, endTime];
 
         if (provider_id) {
           availabilityQuery += ' AND provider_id = ?';
           availabilityParams.push(provider_id);
         }
 
-        availabilityQuery += ' LIMIT 1';
+        // Order by slot size (smallest first) to find the best matching slot
+        availabilityQuery += ' ORDER BY TIME_TO_SEC(TIMEDIFF(end_time, start_time)) ASC LIMIT 1';
         const [availableSlots] = await db.query(availabilityQuery, availabilityParams);
 
         if (availableSlots.length === 0) {
           return res.status(400).json({
             success: false,
-            message: 'No available slots found for the selected time.'
+            message: 'No available slots found for the selected time. Please choose a different time or check availability slots.'
           });
         }
 
-        selectedSlotId = availableSlots[0].slot_id;
+        // Verify the appointment time fits within the slot boundaries
+        const slot = availableSlots[0];
+        const slotStart = new Date(`${slotDate} ${slot.start_time}`);
+        const slotEnd = new Date(`${slotDate} ${slot.end_time}`);
+        const appointmentStart = new Date(scheduled_start);
+        const appointmentEnd = new Date(scheduled_end);
+
+        if (appointmentStart < slotStart || appointmentEnd > slotEnd) {
+          return res.status(400).json({
+            success: false,
+            message: `Appointment time (${startTime} - ${endTime}) does not fit within available slot (${slot.start_time} - ${slot.end_time}).`
+          });
+        }
+
+        selectedSlotId = slot.slot_id;
       } else {
-        // Verify the provided slot is available
+        // Verify the provided slot is available and appointment fits within it
+        // Note: We allow multiple appointments per slot, so we don't check appointment_id IS NULL
         const [slotCheck] = await db.query(`
-          SELECT slot_id, slot_status
+          SELECT slot_id, slot_status, slot_date, start_time, end_time
           FROM availability_slots
           WHERE slot_id = ? AND slot_status = 'available'
         `, [selectedSlotId]);
@@ -607,7 +625,21 @@ router.post('/', authenticateToken, async (req, res) => {
         if (slotCheck.length === 0) {
           return res.status(400).json({
             success: false,
-            message: 'The selected slot is not available.'
+            message: 'The selected slot is not available or is already booked.'
+          });
+        }
+
+        // Verify appointment time fits within slot boundaries
+        const slot = slotCheck[0];
+        const slotStart = new Date(`${slot.slot_date} ${slot.start_time}`);
+        const slotEnd = new Date(`${slot.slot_date} ${slot.end_time}`);
+        const appointmentStart = new Date(scheduled_start);
+        const appointmentEnd = new Date(scheduled_end);
+
+        if (appointmentStart < slotStart || appointmentEnd > slotEnd) {
+          return res.status(400).json({
+            success: false,
+            message: `Appointment time does not fit within the selected slot time boundaries.`
           });
         }
       }
@@ -626,17 +658,57 @@ router.post('/', authenticateToken, async (req, res) => {
       scheduled_start,
       scheduled_end,
       duration_minutes,
-      status: 'scheduled', // Set to scheduled - provider can accept/decline via notifications
+      status: selectedSlotId ? 'confirmed' : 'scheduled', // If slot is auto-assigned, confirm immediately; otherwise wait for provider acceptance
       reason: reason || null,
       notes: notes || null,
       booked_by,
       booked_at: new Date()
     });
 
-    // Start transaction
+    // Start transaction early to ensure atomicity
     await db.query('START TRANSACTION');
 
     try {
+      // If a slot was selected, lock it to prevent race conditions
+      if (selectedSlotId) {
+        const [slotLock] = await db.query(`
+          SELECT slot_id, slot_status, appointment_id
+          FROM availability_slots
+          WHERE slot_id = ? FOR UPDATE
+        `, [selectedSlotId]);
+
+        if (slotLock.length === 0) {
+          await db.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'The selected slot no longer exists.'
+          });
+        }
+
+        const slot = slotLock[0];
+        if (slot.slot_status !== 'available') {
+          await db.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'The selected slot is not available (may be blocked or unavailable).'
+          });
+        }
+        
+        // Verify appointment time fits within slot boundaries
+        const slotStart = new Date(`${slot.slot_date} ${slot.start_time}`);
+        const slotEnd = new Date(`${slot.slot_date} ${slot.end_time}`);
+        const appointmentStart = new Date(scheduled_start);
+        const appointmentEnd = new Date(scheduled_end);
+
+        if (appointmentStart < slotStart || appointmentEnd > slotEnd) {
+          await db.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: `Appointment time does not fit within slot boundaries (${slot.start_time} - ${slot.end_time}).`
+          });
+        }
+      }
+
       // Insert appointment
       await db.query(`
         INSERT INTO appointments (
@@ -660,15 +732,10 @@ router.post('/', authenticateToken, async (req, res) => {
         appointmentData.booked_at
       ]);
 
-      // Update availability slot only if a slot was assigned
-      if (selectedSlotId) {
-        await db.query(`
-          UPDATE availability_slots
-          SET slot_status = 'booked',
-              appointment_id = ?
-          WHERE slot_id = ?
-        `, [appointment_id, selectedSlotId]);
-      }
+      // Note: We don't mark the slot as 'booked' or set appointment_id
+      // This allows multiple appointments within the same slot time range
+      // The slot remains 'available' and can accept multiple patients
+      // Validation ensures appointments fit within slot boundaries (already done above)
 
       // Commit transaction first
       await db.query('COMMIT');
@@ -1006,20 +1073,38 @@ router.delete('/:id', authenticateToken, async (req, res) => {
       });
     }
 
-    // Update appointment status to cancelled instead of deleting
-    await db.query(`
-      UPDATE appointments 
-      SET status = 'cancelled',
-          cancelled_at = ?,
-          cancelled_by = ?,
-          cancellation_reason = ?
-      WHERE appointment_id = ?
-    `, [
-      new Date(),
-      req.user.user_id,
-      cancellation_reason || null,
-      id
-    ]);
+    // Start transaction
+    await db.query('START TRANSACTION');
+
+    try {
+      // Update appointment status to cancelled instead of deleting
+      await db.query(`
+        UPDATE appointments 
+        SET status = 'cancelled',
+            cancelled_at = ?,
+            cancelled_by = ?,
+            cancellation_reason = ?
+        WHERE appointment_id = ?
+      `, [
+        new Date(),
+        req.user.user_id,
+        cancellation_reason || null,
+        id
+      ]);
+
+      // Free up the availability slot if one was assigned
+      await db.query(`
+        UPDATE availability_slots
+        SET slot_status = 'available',
+            appointment_id = NULL
+        WHERE appointment_id = ?
+      `, [id]);
+
+      await db.query('COMMIT');
+    } catch (error) {
+      await db.query('ROLLBACK');
+      throw error;
+    }
 
     // Auto-calculate ARPA risk score after appointment cancellation
     try {
@@ -1402,17 +1487,21 @@ router.post('/:id/confirm', authenticateToken, async (req, res) => {
 // GET /api/appointments/availability/slots - Get availability slots
 router.get('/availability/slots', authenticateToken, async (req, res) => {
   try {
-    const { provider_id, facility_id, date, date_from, date_to } = req.query;
+    const { provider_id, facility_id, date, date_from, date_to, status } = req.query;
 
     let query = `
       SELECT 
         s.*,
         u.full_name AS provider_name,
-        f.facility_name
+        f.facility_name,
+        a.appointment_id,
+        CONCAT(p.first_name, ' ', p.last_name) AS patient_name
       FROM availability_slots s
       LEFT JOIN users u ON s.provider_id = u.user_id
       LEFT JOIN facilities f ON s.facility_id = f.facility_id
-      WHERE s.slot_status = 'available'
+      LEFT JOIN appointments a ON s.appointment_id = a.appointment_id
+      LEFT JOIN patients p ON a.patient_id = p.patient_id
+      WHERE 1=1
     `;
 
     const params = [];
@@ -1425,6 +1514,11 @@ router.get('/availability/slots', authenticateToken, async (req, res) => {
     if (facility_id) {
       query += ' AND s.facility_id = ?';
       params.push(facility_id);
+    }
+
+    if (status) {
+      query += ' AND s.slot_status = ?';
+      params.push(status);
     }
 
     if (date) {
@@ -1444,46 +1538,9 @@ router.get('/availability/slots', authenticateToken, async (req, res) => {
 
     const [slots] = await db.query(query, params);
 
-    // Filter out slots that have conflicting appointments
-    const availableSlots = [];
-    for (const slot of slots) {
-      const slotDateTime = `${slot.slot_date} ${slot.start_time}`;
-      const slotEndDateTime = `${slot.slot_date} ${slot.end_time}`;
-
-      // Check for conflicts
-      let conflictQuery = `
-        SELECT appointment_id
-        FROM appointments
-        WHERE facility_id = ?
-          AND status NOT IN ('cancelled', 'no_show')
-          AND (
-            (scheduled_start < ? AND scheduled_end > ?) OR
-            (scheduled_start < ? AND scheduled_end > ?) OR
-            (scheduled_start >= ? AND scheduled_end <= ?)
-          )
-      `;
-      const conflictParams = [
-        slot.facility_id,
-        slotDateTime, slotDateTime,
-        slotEndDateTime, slotEndDateTime,
-        slotDateTime, slotEndDateTime
-      ];
-
-      if (slot.provider_id) {
-        conflictQuery += ' AND provider_id = ?';
-        conflictParams.push(slot.provider_id);
-      }
-
-      const [conflicts] = await db.query(conflictQuery, conflictParams);
-
-      if (conflicts.length === 0) {
-        availableSlots.push(slot);
-      }
-    }
-
     res.json({
       success: true,
-      data: availableSlots
+      data: slots
     });
   } catch (error) {
     console.error('Error fetching availability slots:', error);
@@ -1708,6 +1765,322 @@ router.put('/availability/slots/:id', authenticateToken, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to update availability slot',
+      error: error.message
+    });
+  }
+});
+
+// POST /api/appointments/availability/slots/:slotId/accept-appointment - Accept appointment into slot
+router.post('/availability/slots/:slotId/accept-appointment', authenticateToken, async (req, res) => {
+  try {
+    // Check permissions - only admins, physicians, and case managers can accept appointments
+    if (!['admin', 'physician', 'case_manager'].includes(req.user.role)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Only administrators, physicians, and case managers can accept appointments into slots.',
+      });
+    }
+
+    const { slotId } = req.params;
+    const { appointment_id } = req.body;
+
+    if (!appointment_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required field: appointment_id'
+      });
+    }
+
+    // Start transaction early and lock the slot row to prevent race conditions
+    await db.query('START TRANSACTION');
+
+    // Check if slot exists WITH ROW LOCK to prevent concurrent modifications
+    const [slots] = await db.query(`
+      SELECT 
+        s.*,
+        u.full_name AS provider_name,
+        f.facility_name
+      FROM availability_slots s
+      LEFT JOIN users u ON s.provider_id = u.user_id
+      LEFT JOIN facilities f ON s.facility_id = f.facility_id
+      WHERE s.slot_id = ?
+      FOR UPDATE  -- Lock this row to prevent concurrent updates
+    `, [slotId]);
+
+    if (slots.length === 0) {
+      await db.query('ROLLBACK');
+      return res.status(404).json({
+        success: false,
+        message: 'Availability slot not found'
+      });
+    }
+
+    const slot = slots[0];
+
+    // Scenario 1: Slot is already booked
+    if (slot.slot_status === 'booked') {
+      await db.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: 'Slot is already booked. Cannot accept appointment.',
+        scenario: 'slot_already_booked',
+        slot: {
+          slot_id: slot.slot_id,
+          appointment_id: slot.appointment_id,
+          status: slot.slot_status
+        }
+      });
+    }
+
+    // Scenario 2: Slot is blocked
+    if (slot.slot_status === 'blocked') {
+      await db.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: 'Slot is blocked. Cannot accept appointment.',
+        scenario: 'slot_blocked',
+        slot: {
+          slot_id: slot.slot_id,
+          status: slot.slot_status
+        }
+      });
+    }
+
+    // Scenario 3: Slot is unavailable
+    if (slot.slot_status === 'unavailable') {
+      await db.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: 'Slot is unavailable. Cannot accept appointment.',
+        scenario: 'slot_unavailable',
+        slot: {
+          slot_id: slot.slot_id,
+          status: slot.slot_status
+        }
+      });
+    }
+
+    // Scenario 4: Slot is expired (past date/time)
+    const slotDateTime = new Date(`${slot.slot_date} ${slot.end_time}`);
+    if (slotDateTime < new Date()) {
+      await db.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: 'Slot has expired. Cannot accept appointment.',
+        scenario: 'slot_expired',
+        slot: {
+          slot_id: slot.slot_id,
+          slot_date: slot.slot_date,
+          end_time: slot.end_time
+        }
+      });
+    }
+
+    // Check if appointment exists
+    const [appointments] = await db.query(`
+      SELECT 
+        a.*,
+        CONCAT(p.first_name, ' ', p.last_name) AS patient_name
+      FROM appointments a
+      LEFT JOIN patients p ON a.patient_id = p.patient_id
+      WHERE a.appointment_id = ?
+      FOR UPDATE  -- Lock appointment row as well
+    `, [appointment_id]);
+
+    if (appointments.length === 0) {
+      await db.query('ROLLBACK');
+      return res.status(404).json({
+        success: false,
+        message: 'Appointment not found'
+      });
+    }
+
+    const appointment = appointments[0];
+
+    // NEW: Validate appointment time matches slot time boundaries
+    const appointmentStart = new Date(appointment.scheduled_start);
+    const appointmentEnd = new Date(appointment.scheduled_end);
+    const slotStart = new Date(`${slot.slot_date}T${slot.start_time}`);
+    const slotEnd = new Date(`${slot.slot_date}T${slot.end_time}`);
+
+    // Check if appointment fits within slot boundaries
+    if (appointmentStart < slotStart || appointmentEnd > slotEnd) {
+      await db.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: 'Appointment time does not match slot time boundaries',
+        scenario: 'time_mismatch',
+        details: {
+          appointment_start: appointment.scheduled_start,
+          appointment_end: appointment.scheduled_end,
+          slot_start: `${slot.slot_date} ${slot.start_time}`,
+          slot_end: `${slot.slot_date} ${slot.end_time}`
+        }
+      });
+    }
+
+    // Scenario 5: Appointment already has a slot assigned
+    const [existingSlot] = await db.query(`
+      SELECT slot_id, slot_status, appointment_id
+      FROM availability_slots
+      WHERE appointment_id = ?
+    `, [appointment_id]);
+
+    if (existingSlot.length > 0 && existingSlot[0].slot_id !== slotId) {
+      await db.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: 'Appointment is already assigned to another slot.',
+        scenario: 'appointment_has_slot',
+        existing_slot: {
+          slot_id: existingSlot[0].slot_id,
+          status: existingSlot[0].slot_status
+        }
+      });
+    }
+
+    // Scenario 7: Check if provider matches (if slot has provider)
+    if (slot.provider_id && appointment.provider_id && slot.provider_id !== appointment.provider_id) {
+      await db.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: 'Provider mismatch. Slot provider does not match appointment provider.',
+        scenario: 'provider_mismatch',
+        slot_provider_id: slot.provider_id,
+        appointment_provider_id: appointment.provider_id
+      });
+    }
+
+    // Scenario 8: Check if facility matches
+    if (slot.facility_id !== appointment.facility_id) {
+      await db.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: 'Facility mismatch. Slot facility does not match appointment facility.',
+        scenario: 'facility_mismatch',
+        slot_facility_id: slot.facility_id,
+        appointment_facility_id: appointment.facility_id
+      });
+    }
+
+    // Scenario 9: Check for conflicting appointments in the same slot
+    const [conflicts] = await db.query(`
+      SELECT appointment_id, scheduled_start, scheduled_end, status
+      FROM appointments
+      WHERE facility_id = ?
+        AND status NOT IN ('cancelled', 'no_show')
+        AND appointment_id != ?
+        AND (
+          (scheduled_start < ? AND scheduled_end > ?) OR
+          (scheduled_start < ? AND scheduled_end > ?) OR
+          (scheduled_start >= ? AND scheduled_end <= ?)
+        )
+    `, [
+      slot.facility_id,
+      appointment_id,
+      appointment.scheduled_end, appointment.scheduled_start,
+      appointment.scheduled_start, appointment.scheduled_end,
+      appointment.scheduled_start, appointment.scheduled_end
+    ]);
+
+    if (conflicts.length > 0) {
+      await db.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: 'Time conflict detected. Another appointment exists in this time slot.',
+        scenario: 'time_conflict',
+        conflicts: conflicts
+      });
+    }
+
+    // All checks passed - accept appointment into slot (transaction already started)
+
+    try {
+      // Update slot to booked and link to appointment
+      await db.query(`
+        UPDATE availability_slots
+        SET slot_status = 'booked',
+            appointment_id = ?
+        WHERE slot_id = ?
+      `, [appointment_id, slotId]);
+
+      // Update appointment status to confirmed if it's scheduled
+      if (appointment.status === 'scheduled') {
+        await db.query(`
+          UPDATE appointments
+          SET status = 'confirmed'
+          WHERE appointment_id = ?
+        `, [appointment_id]);
+      }
+
+      await db.query('COMMIT');
+    } catch (error) {
+      await db.query('ROLLBACK');
+      throw error;
+    }
+
+    // Fetch updated slot and appointment
+    const [updated] = await db.query(`
+      SELECT 
+        s.*,
+        u.full_name AS provider_name,
+        f.facility_name,
+        a.appointment_id,
+        a.patient_id,
+        a.provider_id,
+        a.facility_id,
+        a.scheduled_start,
+        a.scheduled_end,
+        a.appointment_type,
+        a.status,
+        CONCAT(p.first_name, ' ', p.last_name) AS patient_name
+      FROM availability_slots s
+      LEFT JOIN users u ON s.provider_id = u.user_id
+      LEFT JOIN facilities f ON s.facility_id = f.facility_id
+      LEFT JOIN appointments a ON s.appointment_id = a.appointment_id
+      LEFT JOIN patients p ON a.patient_id = p.patient_id
+      WHERE s.slot_id = ?
+    `, [slotId]);
+
+    // Send confirmation notification to patient when appointment is accepted into slot
+    if (updated.length > 0 && updated[0].appointment_id) {
+      try {
+        const { notifyAppointmentSlotConfirmed } = await import('./notifications.js');
+        await notifyAppointmentSlotConfirmed(updated[0]);
+      } catch (notifError) {
+        console.error('Error sending confirmation notification to patient:', notifError);
+        // Don't fail the request if notification fails
+      }
+    }
+
+    // Log audit
+    const userInfo = await getUserInfoForAudit(req.user.user_id);
+    await logAudit({
+      action: 'UPDATE',
+      table_name: 'availability_slots',
+      record_id: slotId,
+      user_id: req.user.user_id,
+      user_name: userInfo?.username || 'Unknown',
+      ip_address: getClientIp(req),
+      changes: JSON.stringify({
+        action: 'accept_appointment',
+        appointment_id: appointment_id,
+        previous_status: slot.slot_status,
+        new_status: 'booked'
+      })
+    });
+
+    res.json({
+      success: true,
+      message: 'Appointment accepted into slot successfully',
+      data: updated[0],
+      scenario: 'success'
+    });
+  } catch (error) {
+    console.error('Error accepting appointment into slot:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to accept appointment into slot',
       error: error.message
     });
   }
