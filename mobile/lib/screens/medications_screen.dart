@@ -56,21 +56,18 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
       final result = await ApiService.getPrescriptions();
       if (result['success'] == true) {
         final prescriptions = result['data'] ?? [];
-        print('💊 Loaded ${prescriptions.length} prescriptions');
         
         setState(() {
           _prescriptions = prescriptions;
           _extractPrescribedMedications();
         });
       } else {
-        print('❌ Failed to load prescriptions: ${result['message']}');
         setState(() {
           _prescriptions = [];
           _prescribedMedications = [];
         });
       }
     } catch (e) {
-      print('❌ Error loading prescriptions: $e');
       setState(() {
         _prescriptions = [];
         _prescribedMedications = [];
@@ -115,16 +112,12 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
                          user['patient']?['patient_id'] ?? 
                          user['user_id'];
         
-        print('👤 Loaded user info - patient_id: $patientId');
-        
         setState(() {
           _patientId = patientId?.toString();
         });
-      } else {
-        print('❌ Failed to load user info: ${userResult['message']}');
       }
     } catch (e) {
-      print('❌ Error loading user info: $e');
+      // Error loading user info
     }
   }
 
@@ -132,18 +125,13 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
     setState(() => _isLoading = true);
     try {
       // Load reminders from API (same as dashboard - backend will use authenticated user's patient_id from token)
-      print('🔔 Loading reminders from API...');
       final remindersResult = await ApiService.getMedicationReminders();
-      
-      print('📡 Reminders API response: ${remindersResult['success']}');
       
       List<dynamic> remindersList = [];
       if (remindersResult['success'] == true) {
         // Handle both 'data' and 'reminders' response formats (for compatibility)
         remindersList = remindersResult['data'] as List? ?? [];
-        print('✅ Loaded ${remindersList.length} reminders from API');
       } else {
-        print('❌ Failed to load reminders: ${remindersResult['message']}');
         remindersList = [];
       }
       
@@ -173,10 +161,7 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
         _reminders = normalizedReminders;
         _isLoading = false;
       });
-      
-      print('📋 Final reminders count: ${normalizedReminders.length}');
     } catch (e) {
-      print('❌ Error loading reminders: $e');
       setState(() {
         _reminders = [];
         _isLoading = false;
@@ -199,7 +184,6 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
     }
     
     if (_patientId == null) {
-      print('⚠️ Patient ID not available for adherence data');
       setState(() {
         _adherenceRecords = [];
         _adherenceSummary = {};
@@ -210,15 +194,11 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
 
     try {
       // Load adherence records from API using general endpoint with patient_id query param (same as backend route)
-      print('📊 Loading adherence data for patient: $_patientId');
       final result = await ApiService.getMedicationAdherence(patientId: _patientId);
       
       if (result['success'] == true) {
         final records = result['data'] ?? [];
         final summary = result['summary'] ?? {};
-        
-        print('📊 Loaded ${records.length} adherence records');
-        print('📈 Summary: $summary');
         
         setState(() {
           _adherenceRecords = records;
@@ -234,7 +214,6 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
           }
         });
       } else {
-        print('❌ Failed to load adherence data: ${result['message']}');
         setState(() {
           _adherenceRecords = [];
           _adherenceSummary = {};
@@ -242,7 +221,6 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
         });
       }
     } catch (e) {
-      print('❌ Error loading adherence data: $e');
       setState(() {
         _adherenceRecords = [];
         _adherenceSummary = {};
@@ -1300,7 +1278,7 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
         return '$hour12:${minute.toString().padLeft(2, '0')} $period';
       }
     } catch (e) {
-      print('Error formatting time: $e');
+      // Error formatting time
     }
     return timeStr;
   }
@@ -1365,7 +1343,6 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
   Future<void> _handleAddReminder() async {
     // Validate form first
     if (!_formKey.currentState!.validate()) {
-      print('❌ Form validation failed');
       return;
     }
     
@@ -1375,7 +1352,6 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
         : _medicationNameController.text.trim();
     
     if (medicationName.isEmpty) {
-      print('❌ Medication name is empty');
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Please enter a medication name'),
@@ -1387,11 +1363,9 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
     
     // Ensure patientId is loaded
     if (_patientId == null) {
-      print('⚠️ Patient ID not found, trying to load user info...');
       await _loadUserInfo();
       
       if (_patientId == null) {
-        print('❌ Patient ID still not available after reload');
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Patient ID not found. Please login again.'),
@@ -1424,17 +1398,12 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
         'prescription_id': _selectedPrescriptionId,
     };
     
-    print('📝 Creating reminder with data: $reminderData');
-    
     try {
       final result = await ApiService.createMedicationReminder(reminderData);
-      
-      print('📡 Create reminder response: ${result['success']}');
       
       if (!mounted) return;
       
       if (result['success'] == true) {
-        print('✅ Reminder created successfully');
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Row(
@@ -1451,7 +1420,6 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
         Navigator.pop(context);
         await _loadReminders();
       } else {
-        print('❌ Failed to create reminder: ${result['message']}');
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(result['message'] ?? 'Failed to create reminder'),
@@ -1461,7 +1429,6 @@ class _MedicationsScreenState extends State<MedicationsScreen> {
         );
       }
     } catch (e) {
-      print('❌ Exception creating reminder: $e');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(

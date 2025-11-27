@@ -16,6 +16,19 @@ export const setSocketIO = (socketIO) => {
  */
 export async function processAppointmentReminders() {
   try {
+    // Check if appointment_reminders table exists
+    const [tables] = await db.query(`
+      SELECT TABLE_NAME 
+      FROM information_schema.TABLES 
+      WHERE TABLE_SCHEMA = DATABASE() 
+      AND TABLE_NAME = 'appointment_reminders'
+    `);
+    
+    if (tables.length === 0) {
+      console.log('appointment_reminders table does not exist. Skipping reminder processing.');
+      return { success: true, processed: 0, message: 'Table does not exist' };
+    }
+
     // Get all pending reminders that are due
     const [reminders] = await db.query(`
       SELECT 
@@ -73,6 +86,11 @@ export async function processAppointmentReminders() {
 
     return { success: true, processed: reminders.length };
   } catch (error) {
+    // If table doesn't exist, return success with 0 processed
+    if (error.code === 'ER_NO_SUCH_TABLE' && error.sqlMessage?.includes('appointment_reminders')) {
+      console.log('appointment_reminders table does not exist. Skipping reminder processing.');
+      return { success: true, processed: 0, message: 'Table does not exist' };
+    }
     console.error('Error processing appointment reminders:', error);
     return { success: false, error: error.message };
   }

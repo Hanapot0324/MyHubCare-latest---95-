@@ -72,6 +72,42 @@ router.get('/', authenticateToken, async (req, res) => {
 
     const params = [];
 
+    // Role-based filtering
+    if (req.user.role === 'patient') {
+      // Patients only see their own appointments
+      // Get patient_id from user's linked patient record
+      const [patientRows] = await db.query(`
+        SELECT patient_id FROM patients 
+        WHERE created_by = ? OR email IN (SELECT email FROM users WHERE user_id = ?)
+        LIMIT 1
+      `, [req.user.user_id, req.user.user_id]);
+      
+      if (patientRows.length > 0) {
+        query += ' AND a.patient_id = ?';
+        params.push(patientRows[0].patient_id);
+      } else {
+        // If no patient record found, return empty results
+        query += ' AND 1=0';
+      }
+    } else if (req.user.role === 'case_manager') {
+      // Case managers see appointments for their facility by default
+      // Only filter by facility_id if not explicitly provided in query
+      if (!facility_id && req.user.facility_id) {
+        query += ' AND a.facility_id = ?';
+        params.push(req.user.facility_id);
+        console.log('Case manager: Auto-filtering by facility_id:', req.user.facility_id);
+      }
+    } else if (req.user.role === 'physician') {
+      // Physicians see appointments assigned to them by default
+      // Only filter by provider_id if not explicitly provided in query
+      if (!provider_id && req.user.user_id) {
+        query += ' AND a.provider_id = ?';
+        params.push(req.user.user_id);
+        console.log('Physician: Auto-filtering by provider_id:', req.user.user_id);
+      }
+    }
+    // Admins see all appointments (no automatic filtering)
+
     if (patient_id) {
       query += ' AND a.patient_id = ?';
       params.push(patient_id);
@@ -112,13 +148,73 @@ router.get('/', authenticateToken, async (req, res) => {
     console.log('Executing query:', query);
     console.log('Query params:', params);
 
+    // Debug: Check total appointments in database (for admins)
+    if (req.user.role === 'admin') {
+      const [totalCount] = await db.query('SELECT COUNT(*) as total FROM appointments');
+      console.log('📊 Total appointments in database:', totalCount[0]?.total || 0);
+    }
+
     const [appointments] = await db.query(query, params);
 
     console.log('Query successful. Found', appointments.length, 'appointments');
+    
+    // Debug: Log first few appointments if found
+    if (appointments.length > 0) {
+      console.log('📋 Sample appointments:', appointments.slice(0, 3).map(apt => ({
+        appointment_id: apt.appointment_id,
+        patient_id: apt.patient_id,
+        facility_id: apt.facility_id,
+        status: apt.status,
+        scheduled_start: apt.scheduled_start
+      })));
+    } else {
+      console.log('⚠️ No appointments found. Checking if query is too restrictive...');
+      // For debugging: try a simpler query to see if any appointments exist
+      if (req.user.role === 'admin') {
+        try {
+          const [allAppointments] = await db.query('SELECT appointment_id, patient_id, facility_id, status, scheduled_start FROM appointments LIMIT 5');
+          console.log('🔍 All appointments in DB (sample):', allAppointments);
+          
+          // Also check if there are appointments with the user's facility_id
+          if (req.user.facility_id) {
+            const [facilityAppointments] = await db.query(
+              'SELECT COUNT(*) as count FROM appointments WHERE facility_id = ?',
+              [req.user.facility_id]
+            );
+            console.log('🏥 Appointments for facility', req.user.facility_id + ':', facilityAppointments[0]?.count || 0);
+          }
+        } catch (debugError) {
+          console.error('Error in debug query:', debugError);
+        }
+      }
+      
+      // For patients, check if patient_id exists in appointments
+      if (req.user.role === 'patient') {
+        try {
+          const [patientRows] = await db.query(`
+            SELECT patient_id FROM patients 
+            WHERE created_by = ? OR email IN (SELECT email FROM users WHERE user_id = ?)
+            LIMIT 1
+          `, [req.user.user_id, req.user.user_id]);
+          
+          if (patientRows.length > 0) {
+            const patientId = patientRows[0].patient_id;
+            const [patientApptCount] = await db.query(
+              'SELECT COUNT(*) as count FROM appointments WHERE patient_id = ?',
+              [patientId]
+            );
+            console.log('👤 Appointments for patient', patientId + ':', patientApptCount[0]?.count || 0);
+          }
+        } catch (debugError) {
+          console.error('Error checking patient appointments:', debugError);
+        }
+      }
+    }
 
     res.json({ 
       success: true, 
-      data: appointments 
+      data: appointments,
+      count: appointments.length
     });
   } catch (error) {
     console.error('=== ERROR fetching appointments ===');
@@ -139,7 +235,7 @@ router.get('/date/:date', authenticateToken, async (req, res) => {
   try {
     const { date } = req.params;
 
-    const [appointments] = await db.query(`
+    let query = `
       SELECT 
         a.*,
         CONCAT(p.first_name, ' ', p.last_name) AS patient_name,
@@ -152,8 +248,42 @@ router.get('/date/:date', authenticateToken, async (req, res) => {
       LEFT JOIN facilities f ON a.facility_id = f.facility_id
       LEFT JOIN users u2 ON a.booked_by = u2.user_id
       WHERE DATE(a.scheduled_start) = ?
-      ORDER BY a.scheduled_start ASC
-    `, [date]);
+    `;
+
+    const params = [date];
+
+    // Role-based filtering
+    if (req.user.role === 'patient') {
+      // Patients only see their own appointments
+      const [patientRows] = await db.query(`
+        SELECT patient_id FROM patients 
+        WHERE created_by = ? OR email IN (SELECT email FROM users WHERE user_id = ?)
+        LIMIT 1
+      `, [req.user.user_id, req.user.user_id]);
+      
+      if (patientRows.length > 0) {
+        query += ' AND a.patient_id = ?';
+        params.push(patientRows[0].patient_id);
+      } else {
+        query += ' AND 1=0';
+      }
+    } else if (req.user.role === 'case_manager') {
+      // Case managers see appointments for their facility
+      if (req.user.facility_id) {
+        query += ' AND a.facility_id = ?';
+        params.push(req.user.facility_id);
+      }
+    } else if (req.user.role === 'physician') {
+      // Physicians see appointments assigned to them
+      if (req.user.user_id) {
+        query += ' AND a.provider_id = ?';
+        params.push(req.user.user_id);
+      }
+    }
+
+    query += ' ORDER BY a.scheduled_start ASC';
+
+    const [appointments] = await db.query(query, params);
 
     res.json({ 
       success: true, 
@@ -213,6 +343,116 @@ router.get('/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// Helper function to check availability (exported for use in appointment-requests.js)
+export async function checkAvailabilityForRequest(facility_id, provider_id, scheduled_start, scheduled_end) {
+  try {
+    const startDate = new Date(scheduled_start);
+    const endDate = new Date(scheduled_end);
+    const slotDate = startDate.toISOString().split('T')[0];
+    const startTime = startDate.toTimeString().slice(0, 8);
+    const endTime = endDate.toTimeString().slice(0, 8);
+
+    // Check for conflicting appointments
+    let conflictQuery = `
+      SELECT appointment_id, scheduled_start, scheduled_end, status
+      FROM appointments
+      WHERE facility_id = ?
+        AND status NOT IN ('cancelled', 'no_show')
+        AND (
+          (scheduled_start < ? AND scheduled_end > ?) OR
+          (scheduled_start < ? AND scheduled_end > ?) OR
+          (scheduled_start >= ? AND scheduled_end <= ?)
+        )
+    `;
+    const conflictParams = [
+      facility_id,
+      scheduled_end, scheduled_start,
+      scheduled_start, scheduled_end,
+      scheduled_start, scheduled_end
+    ];
+
+    if (provider_id) {
+      conflictQuery += ' AND provider_id = ?';
+      conflictParams.push(provider_id);
+    }
+
+    const [conflicts] = await db.query(conflictQuery, conflictParams);
+
+    // Check for doctor conflicts (if provider_id is specified)
+    let doctorConflicts = [];
+    if (provider_id) {
+      const [conflictSlots] = await db.query(`
+        SELECT dc.*
+        FROM doctor_conflicts dc
+        INNER JOIN doctor_assignments da ON dc.assignment_id = da.assignment_id
+        WHERE da.provider_id = ?
+          AND da.facility_id = ?
+          AND (
+            (dc.conflict_start < ? AND dc.conflict_end > ?) OR
+            (dc.conflict_start < ? AND dc.conflict_end > ?) OR
+            (dc.conflict_start >= ? AND dc.conflict_end <= ?)
+          )
+      `, [
+        provider_id,
+        facility_id,
+        scheduled_end, scheduled_start,
+        scheduled_start, scheduled_end,
+        scheduled_start, scheduled_end
+      ]);
+      doctorConflicts = conflictSlots;
+    }
+
+    // Check availability slots (respecting locked/blocked status)
+    let availableSlots = [];
+    let slotQuery = `
+      SELECT slot_id, provider_id, slot_status, appointment_id, lock_status, assignment_id
+      FROM availability_slots
+      WHERE facility_id = ? 
+        AND slot_date = ?
+        AND start_time <= ?
+        AND end_time >= ?
+        AND slot_status IN ('available')
+        AND (lock_status = FALSE OR lock_status IS NULL)
+    `;
+    const slotParams = [facility_id, slotDate, endTime, startTime];
+
+    if (provider_id) {
+      slotQuery += ' AND provider_id = ?';
+      slotParams.push(provider_id);
+    }
+
+    const [slots] = await db.query(slotQuery, slotParams);
+    availableSlots = slots;
+
+    // Check if slots are required (if assignments exist for this facility/provider)
+    const [assignmentCheck] = await db.query(`
+      SELECT COUNT(*) as count
+      FROM doctor_assignments
+      WHERE facility_id = ?
+        ${provider_id ? 'AND provider_id = ?' : ''}
+    `, provider_id ? [facility_id, provider_id] : [facility_id]);
+
+    const hasAssignments = assignmentCheck[0].count > 0;
+    const requiresSlots = hasAssignments;
+
+    // Determine availability
+    const hasConflicts = conflicts.length > 0 || doctorConflicts.length > 0;
+    const hasAvailableSlots = !requiresSlots || availableSlots.length > 0;
+    const isAvailable = !hasConflicts && hasAvailableSlots;
+
+    return {
+      available: isAvailable,
+      conflicts: conflicts,
+      doctor_conflicts: doctorConflicts,
+      available_slots: availableSlots,
+      requires_slots: requiresSlots
+    };
+  } catch (error) {
+    console.error('Error in checkAvailabilityForRequest:', error);
+    throw error;
+  }
+}
+
 // GET /api/appointments/availability/check - Check availability for a specific time slot
 router.get('/availability/check', authenticateToken, async (req, res) => {
   try {
@@ -249,103 +489,26 @@ router.get('/availability/check', authenticateToken, async (req, res) => {
       endTime
     });
 
-    // Check if any slots exist for this facility/provider (to determine if slot system is in use)
-    let slotCheckQuery = `
-      SELECT COUNT(*) as slot_count
-      FROM availability_slots
-      WHERE facility_id = ?
-    `;
-    const slotCheckParams = [facility_id];
-    
-    if (provider_id) {
-      slotCheckQuery += ' AND provider_id = ?';
-      slotCheckParams.push(provider_id);
-    }
-    
-    console.log('Checking if slots are defined...');
-    console.log('Query:', slotCheckQuery);
-    console.log('Params:', slotCheckParams);
-    
-    const [slotCountResult] = await db.query(slotCheckQuery, slotCheckParams);
-    const hasSlotsDefined = slotCountResult[0].slot_count > 0;
-    
-    console.log('Slots defined:', hasSlotsDefined, 'Count:', slotCountResult[0].slot_count);
-
-    // Check availability slots only if slots are defined
-    let availableSlots = [];
-    if (hasSlotsDefined) {
-      console.log('Slots are defined, checking for available slots...');
-      let availabilityQuery = `
-        SELECT slot_id, slot_status, appointment_id
-        FROM availability_slots
-        WHERE facility_id = ? 
-          AND slot_date = ?
-          AND start_time <= ?
-          AND end_time >= ?
-          AND slot_status = 'available'
-      `;
-      const availabilityParams = [facility_id, slotDate, endTime, startTime];
-
-      if (provider_id) {
-        availabilityQuery += ' AND provider_id = ?';
-        availabilityParams.push(provider_id);
-      }
-
-      console.log('Availability query:', availabilityQuery);
-      console.log('Availability params:', availabilityParams);
-
-      const [slots] = await db.query(availabilityQuery, availabilityParams);
-      availableSlots = slots;
-      
-      console.log('Available slots found:', availableSlots.length);
-    } else {
-      console.log('No slots defined for this facility/provider - allowing booking without slot check');
-    }
-
-    // Check for conflicting appointments
-    console.log('Checking for conflicting appointments...');
-    let conflictQuery = `
-      SELECT appointment_id, scheduled_start, scheduled_end, status
-      FROM appointments
-      WHERE facility_id = ?
-        AND status NOT IN ('cancelled', 'no_show')
-        AND (
-          (scheduled_start < ? AND scheduled_end > ?) OR
-          (scheduled_start < ? AND scheduled_end > ?) OR
-          (scheduled_start >= ? AND scheduled_end <= ?)
-        )
-    `;
-    const conflictParams = [
+    // Use the helper function to check availability
+    const availabilityResult = await checkAvailabilityForRequest(
       facility_id,
-      scheduled_end, scheduled_start,
-      scheduled_start, scheduled_end,
-      scheduled_start, scheduled_end
-    ];
+      provider_id || null,
+      scheduled_start,
+      scheduled_end
+    );
 
-    if (provider_id) {
-      conflictQuery += ' AND provider_id = ?';
-      conflictParams.push(provider_id);
-    }
-
-    console.log('Conflict query:', conflictQuery);
-    console.log('Conflict params:', conflictParams);
-
-    const [conflicts] = await db.query(conflictQuery, conflictParams);
-    
-    console.log('Conflicts found:', conflicts.length);
-    if (conflicts.length > 0) {
-      console.log('Conflicting appointments:', conflicts);
-    }
-
-    // If slots are defined, require an available slot. If no slots exist, allow booking (slots not set up yet)
-    // Only block if there are conflicts OR if slots are defined but none are available
-    const isAvailable = conflicts.length === 0 && (!hasSlotsDefined || availableSlots.length > 0);
+    const isAvailable = availabilityResult.available;
+    const conflicts = availabilityResult.conflicts;
+    const doctorConflicts = availabilityResult.doctor_conflicts;
+    const availableSlots = availabilityResult.available_slots;
+    const requiresSlots = availabilityResult.requires_slots;
 
     console.log('Final availability result:', {
       isAvailable,
-      hasSlotsDefined,
+      requiresSlots,
       availableSlotsCount: availableSlots.length,
-      conflictsCount: conflicts.length
+      conflictsCount: conflicts.length,
+      doctorConflictsCount: doctorConflicts.length
     });
 
     res.json({
@@ -354,8 +517,9 @@ router.get('/availability/check', authenticateToken, async (req, res) => {
         available: isAvailable,
         available_slots: availableSlots,
         conflicts: conflicts,
+        doctor_conflicts: doctorConflicts,
         slot_id: isAvailable && availableSlots.length > 0 ? availableSlots[0].slot_id : null,
-        hasSlotsDefined: hasSlotsDefined
+        requires_slots: requiresSlots
       }
     });
   } catch (error) {
@@ -440,6 +604,29 @@ router.post('/', authenticateToken, async (req, res) => {
       });
     }
 
+    // Validate date is not in the past - allow same-day booking
+    const startDate = new Date(scheduled_start);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    if (startDate < today) {
+      return res.status(400).json({
+        success: false,
+        message: 'Appointments cannot be scheduled in the past'
+      });
+    }
+
+    // Validate hourly intervals (minutes must be 0)
+    if (startDate.getMinutes() !== 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Appointments must start on the hour (e.g., 10:00, 11:00)'
+      });
+    }
+
+    // Set default duration to 60 minutes if not provided
+    const finalDurationMinutes = duration_minutes || 60;
+
     // Check if patient exists
     const [patients] = await db.query('SELECT patient_id FROM patients WHERE patient_id = ?', [finalPatientId]);
     if (patients.length === 0) {
@@ -496,7 +683,7 @@ router.post('/', authenticateToken, async (req, res) => {
       appointment_type,
       scheduled_start,
       scheduled_end,
-      duration_minutes,
+      duration_minutes: finalDurationMinutes,
       status: initialStatus,
       reason: reason || null,
       notes: notes || null,

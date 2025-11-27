@@ -527,6 +527,63 @@ class ApiService {
     }
   }
 
+  // Update patient profile
+  static Future<Map<String, dynamic>> updatePatientProfile(String patientId, Map<String, dynamic> patientData) async {
+    try {
+      final headers = await getHeaders();
+      final response = await http.put(
+        Uri.parse('$baseUrl/patients/$patientId'),
+        headers: headers,
+        body: jsonEncode(patientData),
+      );
+      
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return {'success': true, 'patient': data['patient'] ?? data['data']};
+      }
+      
+      String errorMessage = 'Failed to update profile';
+      try {
+        final errorData = jsonDecode(response.body);
+        errorMessage = errorData['message'] ?? errorMessage;
+      } catch (_) {}
+      
+      return {'success': false, 'message': errorMessage};
+    } catch (e) {
+      return {'success': false, 'message': 'Connection error: ${e.toString()}'};
+    }
+  }
+
+  // Change password
+  static Future<Map<String, dynamic>> changePassword(String currentPassword, String newPassword) async {
+    try {
+      final headers = await getHeaders();
+      final response = await http.post(
+        Uri.parse('$baseUrl/auth/change-password'),
+        headers: headers,
+        body: jsonEncode({
+          'currentPassword': currentPassword,
+          'newPassword': newPassword,
+        }),
+      );
+      
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return {'success': true, 'message': data['message'] ?? 'Password changed successfully'};
+      }
+      
+      String errorMessage = 'Failed to change password';
+      try {
+        final errorData = jsonDecode(response.body);
+        errorMessage = errorData['message'] ?? errorMessage;
+      } catch (_) {}
+      
+      return {'success': false, 'message': errorMessage};
+    } catch (e) {
+      return {'success': false, 'message': 'Connection error: ${e.toString()}'};
+    }
+  }
+
   // Get notifications
   static Future<Map<String, dynamic>> getNotifications({String? type}) async {
     try {
@@ -768,15 +825,11 @@ class ApiService {
       if (endDate != null) params['end_date'] = endDate;
       
       final uri = Uri.parse('$baseUrl/medication-adherence/patient/$patientId').replace(queryParameters: params);
-      print('🔍 Fetching adherence from: $uri');
       
       final response = await http.get(uri, headers: headers);
-      print('📡 Response status: ${response.statusCode}');
       
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        print('✅ Adherence data received: ${data['data']?.length ?? 0} records');
-        print('📊 Summary: ${data['summary']}');
         
         return {
           'success': true, 
@@ -786,13 +839,11 @@ class ApiService {
       }
       
       final errorData = jsonDecode(response.body);
-      print('❌ Error response: $errorData');
       return {
         'success': false, 
         'message': errorData['message'] ?? 'Failed to fetch patient adherence'
       };
     } catch (e) {
-      print('❌ Exception fetching adherence: $e');
       return {'success': false, 'message': 'Connection error: ${e.toString()}'};
     }
   }

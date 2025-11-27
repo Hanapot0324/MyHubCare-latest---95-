@@ -5,18 +5,35 @@ import { logAudit, getUserInfoForAudit, getClientIp } from '../utils/auditLogger
 
 const router = express.Router();
 
-// GET /api/providers - Get all physicians/providers (available to all authenticated users)
+// GET /api/users/providers - Get all physicians/providers (available to all authenticated users)
 router.get('/providers', authenticateToken, async (req, res) => {
   try {
     const { facility_id } = req.query;
 
+    console.log('=== GET /api/users/providers ===');
+    console.log('Request user:', req.user);
+    console.log('Query params:', { facility_id });
+
+    // First, let's check ALL users with physician role (for debugging)
+    const [allPhysicians] = await db.query(`
+      SELECT user_id, username, email, full_name, role, status, facility_id
+      FROM users
+      WHERE role = 'physician'
+    `);
+    console.log('🔍 ALL physicians in database (any status):', allPhysicians.length);
+    allPhysicians.forEach(p => {
+      console.log(`  - ${p.full_name} (${p.username}): role=${p.role}, status=${p.status}, facility_id=${p.facility_id}`);
+    });
+
+    // Query: Get all physicians (regardless of status for now, to see all records)
+    // You can change back to 'AND u.status = 'active'' if needed
     let query = `
       SELECT u.user_id, u.username, u.email, u.full_name, u.role, u.status, 
              u.facility_id, u.phone,
              f.facility_name
       FROM users u
       LEFT JOIN facilities f ON u.facility_id = f.facility_id
-      WHERE u.role = 'physician' AND u.status = 'active'
+      WHERE u.role = 'physician'
     `;
 
     const params = [];
@@ -28,11 +45,19 @@ router.get('/providers', authenticateToken, async (req, res) => {
 
     query += ' ORDER BY u.full_name ASC';
 
+    console.log('Executing query:', query);
+    console.log('Query params:', params);
+
     const [providers] = await db.query(query, params);
+
+    console.log('✅ Found active providers:', providers.length);
+    providers.forEach(p => {
+      console.log(`  - ${p.full_name} (${p.username}): facility=${p.facility_name || 'N/A'}`);
+    });
 
     res.json({ success: true, providers });
   } catch (error) {
-    console.error('Error fetching providers:', error);
+    console.error('❌ Error fetching providers:', error);
     res.status(500).json({ 
       success: false, 
       message: 'Failed to fetch providers',

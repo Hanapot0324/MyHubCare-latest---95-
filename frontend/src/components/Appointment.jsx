@@ -889,6 +889,16 @@ const Appointments = ({ socket }) => {
                                 </div>
                             )}
                         </div>
+                        {/* Show who scheduled the appointment for physicians */}
+                        {currentUserRole === 'physician' && apt.booked_by_name && (
+                            <div style={{ marginBottom: '10px', padding: '8px 12px', background: '#F8F2DE', borderRadius: '6px', borderLeft: '3px solid #D84040' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#A31D1D', fontSize: '14px' }}>
+                                    <Calendar size={14} />
+                                    <span style={{ fontWeight: '500' }}>Scheduled by:</span>
+                                    <span style={{ fontWeight: '600' }}>{apt.booked_by_name}</span>
+                                </div>
+                            </div>
+                        )}
                         <div style={{ marginBottom: '10px' }}>
                             <span style={{
                                 padding: '4px 8px',

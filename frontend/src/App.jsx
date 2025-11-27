@@ -44,6 +44,7 @@ import Forum from './components/Forum.jsx';
 import PatientSurvey from './components/PatientSurvey.jsx';
 import SurveyMetrics from './components/SurveyMetrics.jsx';
 import AvailabilitySlots from './components/AvailabilitySlots.jsx';
+import DoctorAssignments from './components/DoctorAssignments.jsx';
 import ProtectedRoute from './components/ProtectedRoute.jsx';
 import { SOCKET_URL } from './config/api';
 
@@ -141,11 +142,22 @@ export default function App() {
               </MainLayout>
             }
           />
+          
           <Route
             path="/availability-slots"
             element={
               <MainLayout socket={socket}>
                 <AvailabilitySlots socket={socket} />
+              </MainLayout>
+            }
+          />
+          <Route
+            path="/doctor-assignments"
+            element={
+              <MainLayout socket={socket}>
+                <ProtectedRoute allowedRoles={['admin']}>
+                  <DoctorAssignments socket={socket} />
+                </ProtectedRoute>
               </MainLayout>
             }
           />

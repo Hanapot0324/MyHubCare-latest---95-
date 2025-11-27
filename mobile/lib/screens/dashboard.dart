@@ -51,7 +51,7 @@ class _DashboardState extends State<Dashboard> {
         }
       }
     } catch (e) {
-      print('Error initializing socket: $e');
+      // Error initializing socket
     }
   }
 

@@ -551,7 +551,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         return payload as Map<String, dynamic>;
       }
     } catch (e) {
-      print('Error parsing payload: $e');
+      // Error parsing payload
     }
     return null;
   }

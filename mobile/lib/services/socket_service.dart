@@ -43,24 +43,20 @@ class SocketService {
 
       _socket!.onConnect((_) {
         _isConnected = true;
-        print('✅ Socket connected: ${_socket!.id}');
       });
 
       _socket!.onDisconnect((_) {
         _isConnected = false;
-        print('❌ Socket disconnected');
       });
 
       _socket!.onConnectError((error) {
         _isConnected = false;
-        print('❌ Socket connection error: $error');
       });
 
       _socket!.onError((error) {
-        print('❌ Socket error: $error');
+        // Socket error
       });
     } catch (e) {
-      print('❌ Error initializing socket: $e');
       _isConnected = false;
     }
   }
@@ -69,7 +65,6 @@ class SocketService {
   static void joinUserRoom(String userId) {
     if (_socket != null && _isConnected) {
       _socket!.emit('joinRoom', userId);
-      print('👤 Joined user room: $userId');
     }
   }
 
@@ -77,7 +72,6 @@ class SocketService {
   static void joinPatientRoom(String patientId) {
     if (_socket != null && _isConnected) {
       _socket!.emit('joinPatientRoom', patientId);
-      print('👤 Joined patient room: $patientId');
     }
   }
 
@@ -85,7 +79,6 @@ class SocketService {
   static void onNotification(Function(dynamic) callback) {
     if (_socket != null) {
       _socket!.on('newNotification', (data) {
-        print('📢 New notification received: $data');
         callback(data);
       });
     }
@@ -95,7 +88,6 @@ class SocketService {
   static void onNewAppointment(Function(dynamic) callback) {
     if (_socket != null) {
       _socket!.on('newAppointment', (data) {
-        print('📅 New appointment notification: $data');
         callback(data);
       });
     }
@@ -105,7 +97,6 @@ class SocketService {
   static void onAppointmentNotification(Function(dynamic) callback) {
     if (_socket != null) {
       _socket!.on('appointmentNotification', (data) {
-        print('📅 Appointment notification: $data');
         callback(data);
       });
     }
@@ -115,7 +106,6 @@ class SocketService {
   static void onMedicationReminder(Function(dynamic) callback) {
     if (_socket != null) {
       _socket!.on('medicationReminder', (data) {
-        print('💊 Medication reminder notification: $data');
         callback(data);
       });
     }
@@ -135,7 +125,6 @@ class SocketService {
       _socket!.dispose();
       _socket = null;
       _isConnected = false;
-      print('🔌 Socket disconnected and disposed');
     }
   }
 

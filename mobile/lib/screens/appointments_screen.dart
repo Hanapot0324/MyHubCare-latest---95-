@@ -102,7 +102,7 @@ class _AppointmentsScreenState extends State<AppointmentsScreen> {
         }
       });
     } catch (e) {
-      print('Error initializing socket: $e');
+      // Error initializing socket
     }
   }
 
@@ -118,15 +118,12 @@ class _AppointmentsScreenState extends State<AppointmentsScreen> {
     /*
     try {
       _audioPlayer.play(AssetSource('notification.mp3')).catchError((e) {
-        print('Could not play notification sound: $e');
+        // Could not play notification sound
       });
     } catch (e) {
-      print('Audio player error: $e');
+      // Audio player error
     }
     */
-    
-    // For now, just log that notification sound would play
-    print('📢 Notification sound (enable by installing audioplayers package)');
   }
 
   Future<void> _loadCurrentUser() async {
@@ -165,7 +162,7 @@ class _AppointmentsScreenState extends State<AppointmentsScreen> {
         }
       }
     } catch (e) {
-      print('Error loading current user: $e');
+      // Error loading current user
     }
   }
 
@@ -175,8 +172,6 @@ class _AppointmentsScreenState extends State<AppointmentsScreen> {
       final patientsResult = await ApiService.getPatients();
       if (patientsResult['success'] == true) {
         setState(() => _patients = patientsResult['data'] ?? []);
-      } else {
-        print('Failed to load patients: ${patientsResult['message']}');
       }
 
       // Load facilities with better error handling
@@ -185,13 +180,10 @@ class _AppointmentsScreenState extends State<AppointmentsScreen> {
         final facilitiesData = facilitiesResult['data'];
         if (facilitiesData is List) {
           setState(() => _facilities = facilitiesData);
-          print('Loaded ${facilitiesData.length} facilities');
         } else {
-          print('Facilities data is not a list: $facilitiesData');
           setState(() => _facilities = []);
         }
       } else {
-        print('Failed to load facilities: ${facilitiesResult['message']}');
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -207,11 +199,8 @@ class _AppointmentsScreenState extends State<AppointmentsScreen> {
       final providersResult = await ApiService.getProviders();
       if (providersResult['success'] == true) {
         setState(() => _providers = providersResult['data'] ?? []);
-      } else {
-        print('Failed to load providers: ${providersResult['message']}');
       }
     } catch (e) {
-      print('Error loading form data: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

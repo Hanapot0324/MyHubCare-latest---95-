@@ -147,7 +147,6 @@ class _MedicationReminderHandlerState extends State<MedicationReminderHandler> {
         }
       }
     } catch (e) {
-      print('Error acknowledging reminder: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

@@ -55,6 +55,7 @@ const ROLE_MENU_ITEMS = {
   admin: [
     { id: 'dashboard', text: 'Dashboard', icon: <DashboardIcon />, path: '/dashboard' },
     { id: 'patients', text: 'Patients', icon: <PeopleIcon />, path: '/patient' },
+    { id: 'doctor-assignments', text: 'Doctor Assignments', icon: <ScheduleIcon />, path: '/doctor-assignments', badge: 'NEW' },
     { id: 'doctor-availability', text: 'Doctor Availability', icon: <ScheduleIcon />, path: '/availability-slots', badge: 'NEW' },
     { id: 'appointment-requests', text: 'Appointment Requests', icon: <AssignmentIcon />, path: '/appointment-requests', badge: 'NEW' },
     { id: 'refill-requests', text: 'Refill Requests', icon: <MedicationIcon />, path: '/refill-requests', badge: 'NEW' },
@@ -137,7 +138,7 @@ const ROLE_MENU_ITEMS = {
   patient: [
     { id: 'dashboard', text: 'My Dashboard', icon: <DashboardIcon />, path: '/dashboard' },
     { id: 'profile', text: 'My Profile', icon: <PersonIcon />, path: '/profile' },
-    { id: 'appointments', text: 'Appointments', icon: <CalendarIcon />, path: '/my-appointments' },
+    { id: 'appointments', text: 'My Appointments', icon: <CalendarIcon />, path: '/my-appointments' },
     { id: 'medications', text: 'My Medications', icon: <MedicationIcon />, path: '/medications', badge: 'NEW' },
     { id: 'prescriptions', text: 'Prescriptions', icon: <DescriptionIcon />, path: '/prescriptions' },
     { id: 'lab-results', text: 'Lab Results', icon: <ScienceIcon />, path: '/lab-test' },
@@ -162,7 +163,11 @@ const Sidebar = () => {
     const menuItems = ROLE_MENU_ITEMS[userRole] || [];
     menuItems.forEach(item => {
       if (item.hasSubmenu && item.submenu) {
-        const isSubmenuActive = item.submenu.some(sub => location.pathname === sub.path);
+        // Check if current path matches any submenu item (ignoring query params)
+        const isSubmenuActive = item.submenu.some(sub => {
+          const subPath = sub.path.split('?')[0];
+          return location.pathname === subPath || location.pathname === item.path;
+        });
         if (isSubmenuActive) {
           setOpenSubmenu(item.id);
         }
@@ -259,34 +264,60 @@ const Sidebar = () => {
                 return (
                   <React.Fragment key={item.id}>
                     <ListItem
-                      onClick={() => toggleSubmenu(item.id)}
+                      onClick={(e) => {
+                        // If clicking the expand icon, only toggle submenu
+                        // Otherwise, navigate to main path
+                        if (e.target.closest('.MuiSvgIcon-root')) {
+                          toggleSubmenu(item.id);
+                        } else {
+                          navigate(item.path);
+                          toggleSubmenu(item.id);
+                        }
+                      }}
                       sx={{
                         cursor: 'pointer',
                         borderRadius: 1,
                         mx: 1,
                         my: 0.5,
-                        borderLeft: isAnySubmenuActive ? '4px solid #B82132' : '4px solid transparent',
+                        borderLeft: (isActive || isAnySubmenuActive) ? '4px solid #B82132' : '4px solid transparent',
                         transition: 'all 0.2s ease-in-out',
-                        backgroundColor: isAnySubmenuActive ? 'rgba(184, 33, 50, 0.1)' : 'transparent',
+                        backgroundColor: (isActive || isAnySubmenuActive) ? 'rgba(184, 33, 50, 0.1)' : 'transparent',
                         '&:hover': {
                           backgroundColor: 'rgba(184, 33, 50, 0.05)',
                           borderLeft: '4px solid #B82132',
                         },
                       }}
                     >
-                      <ListItemIcon sx={{ color: isAnySubmenuActive ? '#B82132' : '#64748b', minWidth: 40 }}>
+                      <ListItemIcon sx={{ color: (isActive || isAnySubmenuActive) ? '#B82132' : '#64748b', minWidth: 40 }}>
                         {item.icon}
                       </ListItemIcon>
                       <ListItemText 
                         primary={item.text}
-                        sx={{ '& .MuiListItemText-primary': { fontSize: '0.875rem', fontWeight: isAnySubmenuActive ? 500 : 400 } }}
+                        sx={{ '& .MuiListItemText-primary': { fontSize: '0.875rem', fontWeight: (isActive || isAnySubmenuActive) ? 500 : 400 } }}
                       />
-                      {isSubmenuOpen ? <ExpandLess /> : <ExpandMore />}
+                      {item.badge && (
+                        <Chip 
+                          label={item.badge} 
+                          size="small" 
+                          sx={{ 
+                            height: '18px', 
+                            fontSize: '10px',
+                            backgroundColor: '#28a745',
+                            color: 'white',
+                            fontWeight: 'bold',
+                            mr: 1
+                          }} 
+                        />
+                      )}
+                      <Box onClick={(e) => { e.stopPropagation(); toggleSubmenu(item.id); }} sx={{ cursor: 'pointer' }}>
+                        {isSubmenuOpen ? <ExpandLess /> : <ExpandMore />}
+                      </Box>
                     </ListItem>
                     <Collapse in={isSubmenuOpen} timeout="auto" unmountOnExit>
                       <List component="div" disablePadding>
                         {item.submenu.map((subItem) => {
-                          const isSubActive = location.pathname === subItem.path;
+                          const subPath = subItem.path.split('?')[0]; // Get path without query params
+                          const isSubActive = location.pathname === subPath;
                           return (
                             <ListItem
                               key={subItem.id}
@@ -305,13 +336,28 @@ const Sidebar = () => {
                                 },
                               }}
                             >
-                              <ListItemIcon sx={{ color: isSubActive ? '#B82132' : '#64748b', minWidth: 40 }}>
-                                {subItem.icon}
-                              </ListItemIcon>
+                              {subItem.icon && (
+                                <ListItemIcon sx={{ color: isSubActive ? '#B82132' : '#64748b', minWidth: 40 }}>
+                                  {subItem.icon}
+                                </ListItemIcon>
+                              )}
                               <ListItemText 
                                 primary={subItem.text}
                                 sx={{ '& .MuiListItemText-primary': { fontSize: '0.875rem' } }}
                               />
+                              {subItem.badge && (
+                                <Chip 
+                                  label={subItem.badge} 
+                                  size="small" 
+                                  sx={{ 
+                                    height: '18px', 
+                                    fontSize: '10px',
+                                    backgroundColor: '#28a745',
+                                    color: 'white',
+                                    fontWeight: 'bold'
+                                  }} 
+                                />
+                              )}
                             </ListItem>
                           );
                         })}

@@ -47,6 +47,8 @@ import artRegimensRoutes from './routes/art-regimens.js';
 import learningModulesRoutes from './routes/learning-modules.js';
 import forumRoutes from './routes/forum.js';
 import refillRequestRoutes from './routes/refill-requests.js';
+import appointmentRequestsRoutes, { setSocketIO as setAppointmentRequestsSocketIO } from './routes/appointment-requests.js';
+import doctorAssignmentsRoutes, { setSocketIO as setDoctorAssignmentsSocketIO } from './routes/doctor-assignments.js';
 
 import { processAppointmentReminders, processMedicationReminders, setSocketIO as setReminderServiceSocketIO } from './services/reminderService.js';
 
@@ -70,6 +72,10 @@ const io = new Server(server, {
 
 // Set Socket.IO instance for appointments route
 setSocketIO(io);
+// Set Socket.IO instance for appointment requests route
+setAppointmentRequestsSocketIO(io);
+// Set Socket.IO instance for doctor assignments route
+setDoctorAssignmentsSocketIO(io);
 // Set Socket.IO instance for reminder service
 setReminderServiceSocketIO(io);
 
@@ -114,6 +120,8 @@ app.use('/api/lab-orders', labOrdersRoutes);
 app.use('/api/lab-results', labResultsRoutes);
 app.use('/api/lab-files', labFilesRoutes);
 app.use('/api/appointments', appointmentsRoutes);
+app.use('/api/appointment-requests', appointmentRequestsRoutes);
+app.use('/api/doctor-assignments', doctorAssignmentsRoutes);
 app.use('/api/notifications', notificationsRoutes);
 app.use('/api/faqs', faqsRoutes);
 app.use('/api/referrals', referralsRoutes);

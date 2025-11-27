@@ -27,19 +27,55 @@ const AppointmentRequests = ({ socket }) => {
   const [selectedRequest, setSelectedRequest] = useState(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [declineReason, setDeclineReason] = useState('');
+  const [currentUser, setCurrentUser] = useState(null);
 
   useEffect(() => {
     fetchRequests();
+    getCurrentUser();
   }, []);
 
   useEffect(() => {
     applyFilters();
   }, [requests, searchTerm, statusFilter]);
 
+  const getAuthToken = () => {
+    return localStorage.getItem('token');
+  };
+
+  // Get current user info and join socket room
+  const getCurrentUser = async () => {
+    try {
+      const token = getAuthToken();
+      if (!token) return;
+
+      const response = await fetch(`${API_BASE_URL}/auth/me`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.user) {
+          setCurrentUser(data.user);
+        }
+      }
+    } catch (error) {
+      console.error('Error getting current user:', error);
+    }
+  };
+
+  // Join user room for real-time notifications
+  useEffect(() => {
+    if (socket && currentUser?.user_id) {
+      socket.emit('joinRoom', currentUser.user_id);
+      console.log('Joined user room for case manager:', currentUser.user_id);
+    }
+  }, [socket, currentUser]);
+
   // Listen for real-time updates
   useEffect(() => {
     if (socket) {
       socket.on('newNotification', (data) => {
+        console.log('New notification received in AppointmentRequests:', data);
         if (data.type === 'appointment_created' || data.type === 'appointment_request') {
           fetchRequests();
         }
@@ -51,18 +87,14 @@ const AppointmentRequests = ({ socket }) => {
     }
   }, [socket]);
 
-  const getAuthToken = () => {
-    return localStorage.getItem('token');
-  };
-
   const fetchRequests = async () => {
     try {
       setLoading(true);
       const token = getAuthToken();
       if (!token) return;
 
-      // Fetch appointments with 'scheduled' status (pending approval)
-      const response = await fetch(`${API_BASE_URL}/appointments?status=scheduled`, {
+      // Fetch appointment requests from the new endpoint
+      const response = await fetch(`${API_BASE_URL}/appointment-requests`, {
         headers: { Authorization: `Bearer ${token}` }
       });
 
@@ -70,7 +102,7 @@ const AppointmentRequests = ({ socket }) => {
       if (data.success) {
         // Sort by newest first
         const sortedRequests = (data.data || []).sort((a, b) => 
-          new Date(b.booked_at) - new Date(a.booked_at)
+          new Date(b.created_at) - new Date(a.created_at)
         );
         setRequests(sortedRequests);
       } else {
@@ -87,13 +119,13 @@ const AppointmentRequests = ({ socket }) => {
   const applyFilters = () => {
     let filtered = [...requests];
 
-    // Status filter
+    // Status filter - now using appointment_requests status values
     if (statusFilter === 'pending') {
-      filtered = filtered.filter(req => req.status === 'scheduled');
+      filtered = filtered.filter(req => req.status === 'pending');
     } else if (statusFilter === 'approved') {
-      filtered = filtered.filter(req => req.status === 'confirmed');
+      filtered = filtered.filter(req => req.status === 'approved');
     } else if (statusFilter === 'declined') {
-      filtered = filtered.filter(req => req.status === 'cancelled');
+      filtered = filtered.filter(req => req.status === 'declined');
     }
 
     // Search filter
@@ -111,14 +143,14 @@ const AppointmentRequests = ({ socket }) => {
     setFilteredRequests(filtered);
   };
 
-const handleApprove = async (appointmentId) => {
+const handleApprove = async (requestId) => {
   try {
     setActionLoading(true);
     const token = getAuthToken();
     if (!token) return;
 
-    // Call the NEW approve endpoint
-    const response = await fetch(`${API_BASE_URL}/appointments/${appointmentId}/approve`, {
+    // Call the appointment-requests approve endpoint
+    const response = await fetch(`${API_BASE_URL}/appointment-requests/${requestId}/approve`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -144,7 +176,7 @@ const handleApprove = async (appointmentId) => {
   }
 };
 
-const handleDecline = async (appointmentId) => {
+const handleDecline = async (requestId) => {
   if (!declineReason.trim()) {
     showToast('Please provide a reason for declining', 'error');
     return;
@@ -155,8 +187,8 @@ const handleDecline = async (appointmentId) => {
     const token = getAuthToken();
     if (!token) return;
 
-    // Call the NEW decline endpoint
-    const response = await fetch(`${API_BASE_URL}/appointments/${appointmentId}/decline`, {
+    // Call the appointment-requests decline endpoint
+    const response = await fetch(`${API_BASE_URL}/appointment-requests/${requestId}/decline`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -209,12 +241,14 @@ const handleDecline = async (appointmentId) => {
 
   const getStatusColor = (status) => {
     switch (status) {
-      case 'scheduled':
+      case 'pending':
         return '#ffc107';
-      case 'confirmed':
+      case 'approved':
         return '#28a745';
-      case 'cancelled':
+      case 'declined':
         return '#dc3545';
+      case 'cancelled':
+        return '#6c757d';
       default:
         return '#6c757d';
     }
@@ -222,12 +256,14 @@ const handleDecline = async (appointmentId) => {
 
   const getStatusIcon = (status) => {
     switch (status) {
-      case 'scheduled':
+      case 'pending':
         return <Clock size={16} color="#ffc107" />;
-      case 'confirmed':
+      case 'approved':
         return <CheckCircle size={16} color="#28a745" />;
-      case 'cancelled':
+      case 'declined':
         return <XCircle size={16} color="#dc3545" />;
+      case 'cancelled':
+        return <XCircle size={16} color="#6c757d" />;
       default:
         return <AlertCircle size={16} color="#6c757d" />;
     }
@@ -271,7 +307,7 @@ const handleDecline = async (appointmentId) => {
             textAlign: 'center'
           }}>
             <div style={{ fontSize: '28px', fontWeight: 'bold', color: 'white' }}>
-              {requests.filter(r => r.status === 'scheduled').length}
+              {requests.filter(r => r.status === 'pending').length}
             </div>
             <div style={{ fontSize: '12px', color: '#F8F2DE' }}>Pending Requests</div>
           </div>
@@ -359,7 +395,7 @@ const handleDecline = async (appointmentId) => {
         }}>
           {filteredRequests.map(request => (
             <div
-              key={request.appointment_id}
+              key={request.request_id}
               style={{
                 background: 'white',
                 padding: '20px',
@@ -405,39 +441,27 @@ const handleDecline = async (appointmentId) => {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '14px', color: '#6c757d' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <Calendar size={16} />
-                    <span>{formatDate(request.scheduled_start)}</span>
+                    <span>{formatDate(request.preferred_start)}</span>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <Clock size={16} />
-                    <span>{formatTime(request.scheduled_start)} - {formatTime(request.scheduled_end)}</span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <User size={16} />
-                    <span>{request.provider_name || 'No provider assigned'}</span>
+                    <span>{formatTime(request.preferred_start)} - {formatTime(request.preferred_end)}</span>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <MapPin size={16} />
                     <span>{request.facility_name || 'N/A'}</span>
                   </div>
+                  {request.appointment_id && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#28a745' }}>
+                      <CheckCircle size={16} />
+                      <span>Appointment Created</span>
+                    </div>
+                  )}
                 </div>
               </div>
 
-              {/* Type Badge */}
-              <div style={{
-                padding: '6px 12px',
-                background: '#e7f3ff',
-                color: '#0066cc',
-                borderRadius: '4px',
-                fontSize: '12px',
-                fontWeight: 'bold',
-                marginBottom: '15px',
-                display: 'inline-block'
-              }}>
-                {getAppointmentTypeLabel(request.appointment_type)}
-              </div>
-
-              {/* Reason */}
-              {request.reason && (
+              {/* Notes */}
+              {request.notes && (
                 <div style={{
                   padding: '10px',
                   background: '#f8f9fa',
@@ -445,7 +469,21 @@ const handleDecline = async (appointmentId) => {
                   marginBottom: '15px',
                   fontSize: '13px'
                 }}>
-                  <strong>Reason:</strong> {request.reason}
+                  <strong>Notes:</strong> {request.notes}
+                </div>
+              )}
+
+              {/* Decline Reason */}
+              {request.decline_reason && (
+                <div style={{
+                  padding: '10px',
+                  background: '#fef2f2',
+                  borderRadius: '4px',
+                  marginBottom: '15px',
+                  fontSize: '13px',
+                  color: '#991b1b'
+                }}>
+                  <strong>Decline Reason:</strong> {request.decline_reason}
                 </div>
               )}
 
@@ -539,38 +577,37 @@ const handleDecline = async (appointmentId) => {
               </div>
 
               <div style={{ marginBottom: '15px' }}>
-                <strong style={{ display: 'block', marginBottom: '5px', color: '#333' }}>Appointment Type</strong>
-                <span style={{ fontSize: '16px' }}>{getAppointmentTypeLabel(selectedRequest.appointment_type)}</span>
-              </div>
-
-              <div style={{ marginBottom: '15px' }}>
-                <strong style={{ display: 'block', marginBottom: '5px', color: '#333' }}>Date & Time</strong>
+                <strong style={{ display: 'block', marginBottom: '5px', color: '#333' }}>Preferred Date & Time</strong>
                 <span style={{ fontSize: '16px' }}>
-                  {formatDate(selectedRequest.scheduled_start)} at {formatTime(selectedRequest.scheduled_start)} - {formatTime(selectedRequest.scheduled_end)}
+                  {formatDate(selectedRequest.preferred_start)} at {formatTime(selectedRequest.preferred_start)} - {formatTime(selectedRequest.preferred_end)}
                 </span>
               </div>
 
               <div style={{ marginBottom: '15px' }}>
-                <strong style={{ display: 'block', marginBottom: '5px', color: '#333' }}>Provider</strong>
-                <span style={{ fontSize: '16px' }}>{selectedRequest.provider_name || 'No provider assigned'}</span>
-              </div>
-
-              <div style={{ marginBottom: '15px' }}>
-                <strong style={{ display: 'block', marginBottom: '5px', color: '#333' }}>Facility</strong>
+                <strong style={{ display: 'block', marginBottom: '5px', color: '#333' }}>Preferred Facility</strong>
                 <span style={{ fontSize: '16px' }}>{selectedRequest.facility_name || 'N/A'}</span>
               </div>
 
-              {selectedRequest.reason && (
+              {selectedRequest.notes && (
                 <div style={{ marginBottom: '15px' }}>
-                  <strong style={{ display: 'block', marginBottom: '5px', color: '#333' }}>Reason</strong>
-                  <span style={{ fontSize: '16px' }}>{selectedRequest.reason}</span>
+                  <strong style={{ display: 'block', marginBottom: '5px', color: '#333' }}>Notes</strong>
+                  <span style={{ fontSize: '16px' }}>{selectedRequest.notes}</span>
                 </div>
               )}
 
-              <div style={{ marginBottom: '15px' }}>
-                <strong style={{ display: 'block', marginBottom: '5px', color: '#333' }}>Duration</strong>
-                <span style={{ fontSize: '16px' }}>{selectedRequest.duration_minutes} minutes</span>
-              </div>
+              {selectedRequest.decline_reason && (
+                <div style={{ marginBottom: '15px' }}>
+                  <strong style={{ display: 'block', marginBottom: '5px', color: '#333' }}>Decline Reason</strong>
+                  <span style={{ fontSize: '16px', color: '#dc3545' }}>{selectedRequest.decline_reason}</span>
+                </div>
+              )}
+
+              {selectedRequest.appointment_id && (
+                <div style={{ marginBottom: '15px' }}>
+                  <strong style={{ display: 'block', marginBottom: '5px', color: '#333' }}>Created Appointment</strong>
+                  <span style={{ fontSize: '16px', color: '#28a745' }}>Appointment ID: {selectedRequest.appointment_id}</span>
+                </div>
+              )}
 
               <div>
                 <strong style={{ display: 'block', marginBottom: '5px', color: '#333' }}>Status</strong>
@@ -592,7 +629,7 @@ const handleDecline = async (appointmentId) => {
             </div>
 
             {/* Decline Reason Input */}
-            {selectedRequest.status === 'scheduled' && (
+            {selectedRequest.status === 'pending' && (
               <div style={{ marginBottom: '20px' }}>
                 <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold', color: '#333' }}>
                   Decline Reason (if declining)
@@ -614,10 +651,10 @@ const handleDecline = async (appointmentId) => {
             )}
 
             {/* Actions */}
-            {selectedRequest.status === 'scheduled' && (
+            {selectedRequest.status === 'pending' && (
               <div style={{ display: 'flex', gap: '10px' }}>
                 <button
-                  onClick={() => handleApprove(selectedRequest.appointment_id)}
+                  onClick={() => handleApprove(selectedRequest.request_id)}
                   disabled={actionLoading}
                   style={{
                     flex: 1,
@@ -645,7 +682,7 @@ const handleDecline = async (appointmentId) => {
                   Approve
                 </button>
                 <button
-                  onClick={() => handleDecline(selectedRequest.appointment_id)}
+                  onClick={() => handleDecline(selectedRequest.request_id)}
                   disabled={actionLoading}
                   style={{
                     flex: 1,

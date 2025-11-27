@@ -61,10 +61,22 @@ const Prescriptions = () => {
   useEffect(() => {
     fetchPrescriptions();
     fetchMedications();
-    fetchPatients();
     fetchFacilities();
     getCurrentUser();
   }, []);
+  useEffect(() => {
+    if (userRole === null || userRole === undefined) {
+      return;
+    }
+
+    if (userRole === 'patient') {
+      setPatients([]);
+      return;
+    }
+
+    fetchPatients();
+  }, [userRole]);
+
 
   // Fetch inventory availability when dispense modal opens
   useEffect(() => {
@@ -120,6 +132,7 @@ const Prescriptions = () => {
           return {
             id: prescription.prescription_id,
             prescription_id: prescription.prescription_id,
+            patient_id: prescription.patient_id,
             prescription_number: prescription.prescription_number,
             patientName: `${prescription.first_name} ${prescription.last_name}`,
             patientAge: prescription.birth_date
@@ -189,6 +202,20 @@ const Prescriptions = () => {
   // Fetch patients from API
   const fetchPatients = async () => {
     try {
+      const storedUserStr = localStorage.getItem('user');
+      if (storedUserStr) {
+        const storedUser = JSON.parse(storedUserStr);
+        if (storedUser?.role === 'patient') {
+          setPatients([]);
+          return;
+        }
+      }
+
+      if (userRole === 'patient') {
+        setPatients([]);
+        return;
+      }
+
       const token = localStorage.getItem('token');
       if (!token) {
         return;
@@ -1004,6 +1031,21 @@ const Prescriptions = () => {
 
   const getFilteredPrescriptions = () => {
     let filtered = prescriptions;
+
+    if (userRole === 'patient') {
+      const patientId =
+        currentUser?.patient_id ||
+        currentUser?.patientId ||
+        currentUser?.id ||
+        currentUser?.user_id;
+
+      filtered = patientId
+        ? filtered.filter(
+            (prescription) =>
+              String(prescription.patient_id) === String(patientId)
+          )
+        : [];
+    }
 
     // Apply search filter
     if (searchTerm) {

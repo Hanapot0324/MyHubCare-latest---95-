@@ -15,6 +15,37 @@ class _CounselingScreenState extends State<CounselingScreen> {
   bool _isLoading = true;
   String _searchTerm = '';
   String _typeFilter = 'all';
+  
+  // Form data for recording session
+  List<dynamic> _patients = [];
+  List<dynamic> _facilities = [];
+  String? _selectedPatientId;
+  String? _selectedFacilityId;
+  DateTime? _sessionDate;
+  String? _selectedSessionType;
+  TextEditingController _durationController = TextEditingController();
+  List<String> _selectedTopics = [];
+  TextEditingController _notesController = TextEditingController();
+  bool _followUpRequired = false;
+  DateTime? _followUpDate;
+  TextEditingController _followUpReasonController = TextEditingController();
+  bool _isSubmitting = false;
+  
+  // Available topics for selection
+  final List<String> _availableTopics = [
+    'Medication Adherence',
+    'Side Effect Management',
+    'Lifestyle Modifications',
+    'Stigma Management',
+    'Disclosure Planning',
+    'Family Support',
+    'Mental Health',
+    'Substance Abuse',
+    'Nutrition',
+    'Exercise',
+    'Safe Sex Practices',
+    'Other',
+  ];
 
   // Map display names to database enum values
   final Map<String, String> _sessionTypeMap = {
@@ -40,6 +71,33 @@ class _CounselingScreenState extends State<CounselingScreen> {
   void initState() {
     super.initState();
     _loadSessions();
+    _loadFormData();
+  }
+  
+  @override
+  void dispose() {
+    _durationController.dispose();
+    _notesController.dispose();
+    _followUpReasonController.dispose();
+    super.dispose();
+  }
+  
+  Future<void> _loadFormData() async {
+    try {
+      // Load patients
+      final patientsResult = await ApiService.getPatients();
+      if (patientsResult['success'] == true) {
+        setState(() => _patients = patientsResult['data'] ?? []);
+      }
+      
+      // Load facilities
+      final facilitiesResult = await ApiService.getFacilities();
+      if (facilitiesResult['success'] == true) {
+        setState(() => _facilities = facilitiesResult['data'] ?? []);
+      }
+    } catch (e) {
+      // Error loading form data
+    }
   }
 
   Future<void> _loadSessions() async {
@@ -214,19 +272,19 @@ class _CounselingScreenState extends State<CounselingScreen> {
                     margin: EdgeInsets.symmetric(horizontal: 20, vertical: 8),
                     padding: EdgeInsets.all(16),
                     decoration: BoxDecoration(
-                      color: Color(0xFFFFF3CD),
+                      color: Color(0xFFECDCBF),
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Color(0xFFFFEBA0)),
+                      border: Border.all(color: Color(0xFFD84040), width: 1.5),
                     ),
                     child: Row(
                       children: [
-                        Icon(Icons.warning_amber_rounded, color: Color(0xFF856404)),
+                        Icon(Icons.warning_amber_rounded, color: Color(0xFFA31D1D)),
                         SizedBox(width: 12),
                         Expanded(
                           child: Text(
                             '$followUpNeeded patient(s) require follow-up counseling',
                             style: TextStyle(
-                              color: Color(0xFF856404),
+                              color: Color(0xFFA31D1D),
                               fontWeight: FontWeight.w600,
                             ),
                           ),
@@ -515,14 +573,15 @@ class _CounselingScreenState extends State<CounselingScreen> {
                       Container(
                         padding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                         decoration: BoxDecoration(
-                          color: Color(0xFFFFF3CD),
+                          color: Color(0xFFECDCBF),
                           borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: Color(0xFFD84040), width: 1),
                         ),
                         child: Text(
                           'FOLLOW-UP DUE',
                           style: TextStyle(
                             fontSize: 10,
-                            color: Color(0xFF856404),
+                            color: Color(0xFFA31D1D),
                             fontWeight: FontWeight.w600,
                             letterSpacing: 0.5,
                           ),
@@ -627,9 +686,9 @@ class _CounselingScreenState extends State<CounselingScreen> {
                   Container(
                     padding: EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: Color(0xFFD1ECF1),
+                      color: Color(0xFFECDCBF),
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Color(0xFFBEE5EB)),
+                      border: Border.all(color: Color(0xFFD84040), width: 1.5),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -638,13 +697,21 @@ class _CounselingScreenState extends State<CounselingScreen> {
                           'Follow-up Required',
                           style: TextStyle(
                             fontWeight: FontWeight.w600,
-                            color: Color(0xFF0C5460),
+                            color: Color(0xFFA31D1D),
                           ),
                         ),
                         if (session['follow_up_date'] != null)
                           Text(
                             'Date: ${DateFormat('MMMM dd, yyyy').format(DateTime.parse(session['follow_up_date']))}',
-                            style: TextStyle(color: Color(0xFF0C5460)),
+                            style: TextStyle(color: Color(0xFFA31D1D)),
+                          ),
+                        if (session['follow_up_reason'] != null && session['follow_up_reason'].toString().isNotEmpty)
+                          Padding(
+                            padding: EdgeInsets.only(top: 4),
+                            child: Text(
+                              'Reason: ${session['follow_up_reason']}',
+                              style: TextStyle(color: Color(0xFFA31D1D), fontSize: 13),
+                            ),
                           ),
                       ],
                     ),
@@ -719,13 +786,495 @@ class _CounselingScreenState extends State<CounselingScreen> {
   }
 
   void _showRecordSessionModal() {
-    // TODO: Implement record session modal
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Record session feature coming soon'),
-        backgroundColor: Color(0xFFA31D1D),
+    // Reset form
+    _selectedPatientId = null;
+    _selectedFacilityId = null;
+    _sessionDate = DateTime.now();
+    _selectedSessionType = null;
+    _durationController.clear();
+    _selectedTopics = [];
+    _notesController.clear();
+    _followUpRequired = false;
+    _followUpDate = null;
+    _followUpReasonController.clear();
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        height: MediaQuery.of(context).size.height * 0.9,
+        decoration: BoxDecoration(
+          color: Color(0xFFF8F2DE),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          children: [
+            // Header
+            Container(
+              padding: EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: Color(0xFFA31D1D),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    'Record Counseling Session',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white,
+                    ),
+                  ),
+                  IconButton(
+                    icon: Icon(Icons.close, color: Colors.white),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ],
+              ),
+            ),
+            // Form
+            Expanded(
+              child: SingleChildScrollView(
+                padding: EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Patient Selection
+                    _buildFormField(
+                      label: 'Patient *',
+                      child: DropdownButtonFormField<String>(
+                        value: _selectedPatientId,
+                        decoration: _inputDecoration(),
+                        items: _patients.map((patient) {
+                          final name = '${patient['first_name'] ?? ''} ${patient['last_name'] ?? ''}'.trim();
+                          return DropdownMenuItem(
+                            value: patient['patient_id']?.toString(),
+                            child: Text(name.isEmpty ? 'N/A' : name),
+                          );
+                        }).toList(),
+                        onChanged: (value) {
+                          setState(() => _selectedPatientId = value);
+                        },
+                      ),
+                    ),
+                    SizedBox(height: 16),
+
+                    // Facility Selection
+                    _buildFormField(
+                      label: 'Facility *',
+                      child: DropdownButtonFormField<String>(
+                        value: _selectedFacilityId,
+                        decoration: _inputDecoration(),
+                        items: _facilities.map((facility) {
+                          return DropdownMenuItem(
+                            value: facility['facility_id']?.toString(),
+                            child: Text(facility['facility_name'] ?? 'N/A'),
+                          );
+                        }).toList(),
+                        onChanged: (value) {
+                          setState(() => _selectedFacilityId = value);
+                        },
+                      ),
+                    ),
+                    SizedBox(height: 16),
+
+                    // Session Date
+                    _buildFormField(
+                      label: 'Session Date *',
+                      child: InkWell(
+                        onTap: () async {
+                          final date = await showDatePicker(
+                            context: context,
+                            initialDate: _sessionDate ?? DateTime.now(),
+                            firstDate: DateTime(2020),
+                            lastDate: DateTime.now().add(Duration(days: 365)),
+                          );
+                          if (date != null) {
+                            setState(() => _sessionDate = date);
+                          }
+                        },
+                        child: Container(
+                          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.grey[300]!),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                _sessionDate != null
+                                    ? DateFormat('MMM dd, yyyy').format(_sessionDate!)
+                                    : 'Select date',
+                                style: TextStyle(
+                                  color: _sessionDate != null ? Color(0xFF1A1A1A) : Colors.grey[600],
+                                ),
+                              ),
+                              Icon(Icons.calendar_today, color: Colors.grey[600]),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    SizedBox(height: 16),
+
+                    // Session Type
+                    _buildFormField(
+                      label: 'Session Type *',
+                      child: DropdownButtonFormField<String>(
+                        value: _selectedSessionType,
+                        decoration: _inputDecoration(),
+                        items: [
+                          DropdownMenuItem(value: 'Adherence Counseling', child: Text('Adherence Counseling')),
+                          DropdownMenuItem(value: 'Mental Health Support', child: Text('Mental Health Support')),
+                          DropdownMenuItem(value: 'Pre-ART Counseling', child: Text('Pre-ART Counseling')),
+                          DropdownMenuItem(value: 'Disclosure Support', child: Text('Disclosure Support')),
+                          DropdownMenuItem(value: 'Family Counseling', child: Text('Family Counseling')),
+                          DropdownMenuItem(value: 'Substance Abuse', child: Text('Substance Abuse')),
+                        ],
+                        onChanged: (value) {
+                          setState(() => _selectedSessionType = value);
+                        },
+                      ),
+                    ),
+                    SizedBox(height: 16),
+
+                    // Duration
+                    _buildFormField(
+                      label: 'Duration (minutes)',
+                      child: TextField(
+                        controller: _durationController,
+                        keyboardType: TextInputType.number,
+                        decoration: _inputDecoration(hintText: 'Enter duration in minutes'),
+                      ),
+                    ),
+                    SizedBox(height: 16),
+
+                    // Topics
+                    _buildFormField(
+                      label: 'Topics Discussed',
+                      child: Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: _availableTopics.map((topic) {
+                          final isSelected = _selectedTopics.contains(topic);
+                          return FilterChip(
+                            label: Text(topic),
+                            selected: isSelected,
+                            onSelected: (selected) {
+                              setState(() {
+                                if (selected) {
+                                  _selectedTopics.add(topic);
+                                } else {
+                                  _selectedTopics.remove(topic);
+                                }
+                              });
+                            },
+                            selectedColor: Color(0xFFECDCBF),
+                            checkmarkColor: Color(0xFFA31D1D),
+                            backgroundColor: Colors.white,
+                            side: BorderSide(
+                              color: isSelected ? Color(0xFFA31D1D) : Colors.grey[300]!,
+                              width: 1,
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    ),
+                    SizedBox(height: 16),
+
+                    // Notes
+                    _buildFormField(
+                      label: 'Session Notes',
+                      child: TextField(
+                        controller: _notesController,
+                        maxLines: 4,
+                        decoration: _inputDecoration(hintText: 'Enter session notes...'),
+                      ),
+                    ),
+                    SizedBox(height: 16),
+
+                    // Follow-up Required
+                    Container(
+                      padding: EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.grey[300]!),
+                      ),
+                      child: Row(
+                        children: [
+                          Checkbox(
+                            value: _followUpRequired,
+                            onChanged: (value) {
+                              setState(() => _followUpRequired = value ?? false);
+                            },
+                            activeColor: Color(0xFFA31D1D),
+                          ),
+                          Expanded(
+                            child: Text(
+                              'Follow-up Required',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w500,
+                                color: Color(0xFF1A1A1A),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    SizedBox(height: 16),
+
+                    // Follow-up Date (if required)
+                    if (_followUpRequired) ...[
+                      _buildFormField(
+                        label: 'Follow-up Date *',
+                        child: InkWell(
+                          onTap: () async {
+                            final date = await showDatePicker(
+                              context: context,
+                              initialDate: _followUpDate ?? DateTime.now().add(Duration(days: 7)),
+                              firstDate: DateTime.now(),
+                              lastDate: DateTime.now().add(Duration(days: 365)),
+                            );
+                            if (date != null) {
+                              setState(() => _followUpDate = date);
+                            }
+                          },
+                          child: Container(
+                            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.grey[300]!),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  _followUpDate != null
+                                      ? DateFormat('MMM dd, yyyy').format(_followUpDate!)
+                                      : 'Select follow-up date',
+                                  style: TextStyle(
+                                    color: _followUpDate != null ? Color(0xFF1A1A1A) : Colors.grey[600],
+                                  ),
+                                ),
+                                Icon(Icons.calendar_today, color: Colors.grey[600]),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                      SizedBox(height: 16),
+
+                      // Follow-up Reason
+                      _buildFormField(
+                        label: 'Follow-up Reason',
+                        child: TextField(
+                          controller: _followUpReasonController,
+                          maxLines: 2,
+                          decoration: _inputDecoration(hintText: 'Reason for follow-up...'),
+                        ),
+                      ),
+                      SizedBox(height: 16),
+                    ],
+
+                    // Submit Button
+                    SizedBox(height: 8),
+                    ElevatedButton(
+                      onPressed: _isSubmitting ? null : _submitSession,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Color(0xFFA31D1D),
+                        foregroundColor: Colors.white,
+                        padding: EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        elevation: 0,
+                      ),
+                      child: _isSubmitting
+                          ? SizedBox(
+                              height: 20,
+                              width: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                              ),
+                            )
+                          : Text(
+                              'Record Session',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                    ),
+                    SizedBox(height: 20),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
+  }
+
+  InputDecoration _inputDecoration({String? hintText}) {
+    return InputDecoration(
+      hintText: hintText,
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: BorderSide(color: Colors.grey[300]!),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: BorderSide(color: Colors.grey[300]!),
+      ),
+      filled: true,
+      fillColor: Colors.white,
+      contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+    );
+  }
+
+  Widget _buildFormField({required String label, required Widget child}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            color: Color(0xFF1A1A1A),
+          ),
+        ),
+        SizedBox(height: 8),
+        child,
+      ],
+    );
+  }
+
+  Future<void> _submitSession() async {
+    // Validation
+    if (_selectedPatientId == null || _selectedPatientId!.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Please select a patient'),
+          backgroundColor: Color(0xFFD84040),
+        ),
+      );
+      return;
+    }
+
+    if (_selectedFacilityId == null || _selectedFacilityId!.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Please select a facility'),
+          backgroundColor: Color(0xFFD84040),
+        ),
+      );
+      return;
+    }
+
+    if (_sessionDate == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Please select a session date'),
+          backgroundColor: Color(0xFFD84040),
+        ),
+      );
+      return;
+    }
+
+    if (_selectedSessionType == null || _selectedSessionType!.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Please select a session type'),
+          backgroundColor: Color(0xFFD84040),
+        ),
+      );
+      return;
+    }
+
+    if (_followUpRequired && _followUpDate == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Please select a follow-up date'),
+          backgroundColor: Color(0xFFD84040),
+        ),
+      );
+      return;
+    }
+
+    setState(() => _isSubmitting = true);
+
+    try {
+      // Prepare session notes JSON
+      final sessionNotes = {
+        'duration': _durationController.text.isNotEmpty
+            ? int.tryParse(_durationController.text) ?? 0
+            : 0,
+        'topics': _selectedTopics,
+        'notes': _notesController.text,
+      };
+
+      // Map session type to database enum value
+      final sessionTypeDb = _sessionTypeMap[_selectedSessionType] ?? 'other';
+
+      // Prepare request data
+      final sessionData = {
+        'patient_id': _selectedPatientId,
+        'facility_id': _selectedFacilityId,
+        'session_date': DateFormat('yyyy-MM-dd').format(_sessionDate!),
+        'session_type': sessionTypeDb,
+        'session_notes': jsonEncode(sessionNotes),
+        'follow_up_required': _followUpRequired,
+        'follow_up_date': _followUpRequired && _followUpDate != null
+            ? DateFormat('yyyy-MM-dd').format(_followUpDate!)
+            : null,
+        'follow_up_reason': _followUpRequired && _followUpReasonController.text.isNotEmpty
+            ? _followUpReasonController.text
+            : null,
+      };
+
+      // Submit to API
+      final result = await ApiService.createCounselingSession(sessionData);
+
+      setState(() => _isSubmitting = false);
+
+      if (result['success'] == true) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Counseling session recorded successfully'),
+            backgroundColor: Color(0xFFA31D1D),
+          ),
+        );
+        // Reload sessions
+        _loadSessions();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(result['message'] ?? 'Failed to record session'),
+            backgroundColor: Color(0xFFD84040),
+          ),
+        );
+      }
+    } catch (e) {
+      setState(() => _isSubmitting = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error: ${e.toString()}'),
+          backgroundColor: Color(0xFFD84040),
+        ),
+      );
+    }
   }
 }
 

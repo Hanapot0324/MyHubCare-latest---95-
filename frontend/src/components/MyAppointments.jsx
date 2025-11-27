@@ -1,11 +1,16 @@
 import React, { useState, useEffect } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, X, Check, Trash2, Bell } from 'lucide-react';
 import { AccessTime, LocationOn, LocalHospital } from '@mui/icons-material';
 import { API_BASE_URL } from '../config/api';
 
 const MyAppointments = ({ socket }) => {
+    const location = useLocation();
+    const navigate = useNavigate();
     const [appointments, setAppointments] = useState([]);
+    const [appointmentRequests, setAppointmentRequests] = useState([]);
     const [filteredAppointments, setFilteredAppointments] = useState([]);
+    const [filter, setFilter] = useState('all'); // 'all', 'upcoming', 'past', 'requested'
     const [currentMonth, setCurrentMonth] = useState(new Date());
     const [selectedDay, setSelectedDay] = useState(null);
     const [toast, setToast] = useState(null);
@@ -45,6 +50,13 @@ const MyAppointments = ({ socket }) => {
         fetchFacilities();
         fetchProviders();
         fetchNotifications();
+        
+        // Read filter from URL query params
+        const params = new URLSearchParams(location.search);
+        const urlFilter = params.get('filter');
+        if (urlFilter && ['all', 'upcoming', 'past', 'requested'].includes(urlFilter)) {
+            setFilter(urlFilter);
+        }
     }, []);
 
     // Fetch appointments after current user is loaded (to filter by patient_id)
@@ -54,6 +66,11 @@ const MyAppointments = ({ socket }) => {
             fetchAllAppointmentsForCalendar();
         }
     }, [currentUserRole, currentPatientId]);
+
+    // Apply filter when appointments, requests, or filter changes
+    useEffect(() => {
+        applyFilter();
+    }, [appointments, appointmentRequests, filter]);
 
     // Fetch notifications
     const fetchNotifications = async () => {
@@ -182,13 +199,82 @@ const MyAppointments = ({ socket }) => {
         }
     };
 
+    const [allFilteredAppointments, setAllFilteredAppointments] = useState([]);
+
+    const applyFilter = () => {
+        const now = new Date();
+        let filtered = [];
+
+        if (filter === 'requested') {
+            // Show appointment requests for patients
+            if (currentUserRole === 'patient') {
+                filtered = appointmentRequests.map(req => ({
+                    ...req,
+                    isRequest: true,
+                    scheduled_start: req.preferred_start,
+                    scheduled_end: req.preferred_end,
+                    patient_name: 'You',
+                    status: req.status,
+                    appointment_type: 'request'
+                }));
+            }
+        } else {
+            // Filter appointments
+            filtered = appointments.filter(apt => {
+                const aptDate = new Date(apt.scheduled_start);
+                
+                if (filter === 'upcoming') {
+                    return aptDate >= now && (apt.status === 'scheduled' || apt.status === 'confirmed');
+                } else if (filter === 'past') {
+                    return aptDate < now || apt.status === 'completed';
+                } else {
+                    // 'all' - show all appointments
+                    return true;
+                }
+            });
+        }
+
+        setAllFilteredAppointments(filtered);
+        
+        // If a day is selected, filter by day as well
+        if (selectedDay) {
+            filterAppointmentsByDay(selectedDay, filtered);
+        } else {
+            setFilteredAppointments(filtered);
+        }
+    };
+
     useEffect(() => {
         if (selectedDay) {
-            filterAppointmentsByDay(selectedDay);
+            filterAppointmentsByDay(selectedDay, allFilteredAppointments);
         } else {
-            setFilteredAppointments([]);
+            setFilteredAppointments(allFilteredAppointments);
         }
-    }, [selectedDay, appointments]);
+    }, [selectedDay, allFilteredAppointments]);
+
+    const fetchAppointmentRequests = async () => {
+        try {
+            const token = getAuthToken();
+            if (!token) return;
+
+            // Only fetch requests for patients
+            if (currentUserRole !== 'patient') return;
+
+            const response = await fetch(`${API_BASE_URL}/appointment-requests`, {
+                headers: {
+                    Authorization: `Bearer ${token}`
+                }
+            });
+
+            const data = await response.json();
+
+            if (data.success) {
+                setAppointmentRequests(data.data || []);
+            }
+        } catch (error) {
+            console.error('Error fetching appointment requests:', error);
+        }
+    };
 
     const fetchAppointments = async () => {
         try {
@@ -231,6 +317,11 @@ const MyAppointments = ({ socket }) => {
             } else {
                 throw new Error(data.message || 'Failed to fetch appointments');
             }
+
+            // Also fetch appointment requests for patients
+            if (currentUserRole === 'patient') {
+                await fetchAppointmentRequests();
+            }
         } catch (error) {
             console.error('Error fetching appointments:', error);
             setToast({
@@ -268,17 +359,29 @@ const MyAppointments = ({ socket }) => {
         }
     };
 
-    const fetchProviders = async () => {
+    const fetchProviders = async (facilityId = null) => {
         try {
             const token = getAuthToken();
             if (!token) return;
 
-            // Try new providers endpoint first
-            let response = await fetch(`${API_BASE_URL}/users/providers`, {
+            // Fetch providers from doctor_assignments (only those with active assignments)
+            let url = `${API_BASE_URL}/doctor-assignments/providers`;
+            if (facilityId) {
+                url += `?facility_id=${facilityId}`;
+            }
+
+            let response = await fetch(url, {
                 headers: { Authorization: `Bearer ${token}` }
             });
 
-            // If new endpoint doesn't exist (404) or access denied (403), fallback to old endpoint
+            // If doctor-assignments endpoint doesn't work, fallback to users/providers
+            if (!response.ok && (response.status === 404 || response.status === 403)) {
+                response = await fetch(`${API_BASE_URL}/users/providers`, {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
+            }
+
+            // If still fails, try old endpoint
             if (!response.ok && (response.status === 404 || response.status === 403)) {
                 response = await fetch(`${API_BASE_URL}/users`, {
                     headers: { Authorization: `Bearer ${token}` }
@@ -294,23 +397,24 @@ const MyAppointments = ({ socket }) => {
             const data = await response.json();
             let providersArray = [];
             
-            // New endpoint returns { success: true, providers: [...] }
+            // Doctor-assignments endpoint returns { success: true, providers: [...] }
             if (data.success && data.providers) {
                 providersArray = data.providers;
             } 
+            // Users/providers endpoint returns { success: true, providers: [...] }
+            else if (data.success && data.providers) {
+                providersArray = data.providers;
+            }
             // Old endpoint returns { success: true, users: [...] }
             else if (data.success && data.users) {
-                // Only fetch physicians/doctors
                 providersArray = data.users.filter(u => 
                     u.role?.toLowerCase() === 'physician'
                 );
             } else if (Array.isArray(data)) {
-                // Only fetch physicians/doctors
                 providersArray = data.filter(u => 
                     u.role?.toLowerCase() === 'physician'
                 );
             } else if (data.users && Array.isArray(data.users)) {
-                // Handle case where response has users but no success flag
                 providersArray = data.users.filter(u => 
                     u.role?.toLowerCase() === 'physician'
                 );
@@ -324,15 +428,17 @@ const MyAppointments = ({ socket }) => {
     };
 
 
-    const filterAppointmentsByDay = (day) => {
+    const filterAppointmentsByDay = (day, appointmentsToFilter = allFilteredAppointments) => {
         if (!day) {
             setFilteredAppointments([]);
             return;
         }
         
         const dateStr = `${currentMonth.getFullYear()}-${String(currentMonth.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-        const filtered = appointments.filter(apt => {
-            const aptDate = new Date(apt.scheduled_start);
+        
+        // Filter appointments for the selected day
+        const filtered = appointmentsToFilter.filter(apt => {
+            const aptDate = new Date(apt.scheduled_start || apt.preferred_start);
             const aptDateStr = `${aptDate.getFullYear()}-${String(aptDate.getMonth() + 1).padStart(2, '0')}-${String(aptDate.getDate()).padStart(2, '0')}`;
             return aptDateStr === dateStr;
         });
@@ -641,10 +747,72 @@ const MyAppointments = ({ socket }) => {
             const token = getAuthToken();
             
             // Convert form data to API format
-            const scheduledStart = `${newAppointment.appointmentDate} ${newAppointment.appointmentTime}:00`;
-            const scheduledEnd = calculateEndTime(newAppointment.appointmentDate, newAppointment.appointmentTime, newAppointment.duration_minutes || 30);
+            // Use end time if provided, otherwise calculate from duration
+            let scheduledStart = `${newAppointment.appointmentDate} ${newAppointment.appointmentTime}:00`;
+            let scheduledEnd;
+            
+            if (newAppointment.appointmentEndTime) {
+                scheduledEnd = `${newAppointment.appointmentDate} ${newAppointment.appointmentEndTime}:00`;
+            } else {
+                scheduledEnd = calculateEndTime(newAppointment.appointmentDate, newAppointment.appointmentTime, newAppointment.duration_minutes || 60);
+            }
 
-            // Auto-fill patient_id or provider_id based on user role
+            // Validate date is not in the past
+            const startDate = new Date(scheduledStart);
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+
+            if (startDate < today) {
+                setToast({
+                    message: 'Appointments cannot be scheduled in the past',
+                    type: 'error'
+                });
+                return;
+            }
+
+            // Validate hourly intervals (minutes must be 0)
+            if (startDate.getMinutes() !== 0) {
+                setToast({
+                    message: 'Appointments must start on the hour (e.g., 10:00, 11:00)',
+                    type: 'error'
+                });
+                return;
+            }
+
+            // If user is a patient, create an appointment request instead of direct appointment
+            if (currentUserRole === 'patient') {
+                const requestData = {
+                    preferred_start: scheduledStart,
+                    preferred_end: scheduledEnd,
+                    preferred_facility_id: newAppointment.facility_id,
+                    notes: newAppointment.notes || null
+                };
+
+                const response = await fetch(`${API_BASE_URL}/appointment-requests`, {
+                    method: 'POST',
+                    headers: {
+                        Authorization: `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(requestData)
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    await fetchAppointments(); // Refresh to show the new request
+                    setShowAddModal(false);
+                    setToast({
+                        message: 'Appointment request submitted successfully. Awaiting case manager approval.',
+                        type: 'success'
+                    });
+                } else {
+                    throw new Error(data.message || 'Failed to create appointment request');
+                }
+                return;
+            }
+
+            // For staff users (physician, case_manager, admin), create appointment directly
             const finalProviderId = currentUserRole === 'physician' ? currentProviderId : newAppointment.provider_id || null;
 
             // Check availability before creating (informational only - backend will validate)
@@ -657,22 +825,20 @@ const MyAppointments = ({ socket }) => {
 
             // Show warning if unavailable, but don't block - let backend handle validation
             if (isAvailable === false) {
-                // Show a warning toast but proceed with booking
                 setToast({
                     message: 'Warning: This time slot may not be available. Proceeding with booking attempt...',
                     type: 'error'
                 });
-                // Don't return - continue with booking attempt
             }
 
             const appointmentData = {
-                patient_id: currentUserRole === 'patient' ? currentPatientId : newAppointment.patient_id,
+                patient_id: newAppointment.patient_id,
                 provider_id: finalProviderId,
                 facility_id: newAppointment.facility_id,
                 appointment_type: newAppointment.appointment_type,
                 scheduled_start: scheduledStart,
                 scheduled_end: scheduledEnd,
-                duration_minutes: newAppointment.duration_minutes || 30,
+                duration_minutes: newAppointment.duration_minutes || 60,
                 reason: newAppointment.reason || null,
                 notes: newAppointment.notes || null
             };
@@ -1346,29 +1512,40 @@ const MyAppointments = ({ socket }) => {
 
     const renderAppointmentList = (appointmentsList) => {
         if (appointmentsList.length === 0) {
+            const emptyMessage = filter === 'requested' 
+                ? 'No appointment requests found' 
+                : filter === 'upcoming'
+                ? 'No upcoming appointments'
+                : filter === 'past'
+                ? 'No past appointments'
+                : 'No appointments scheduled';
+            
             return (
                 <div style={{ 
                     textAlign: 'center', 
                     padding: '40px 20px',
                     color: '#6c757d'
                 }}>
-                    <p>No appointments scheduled for this day</p>
+                    <p>{emptyMessage}</p>
                 </div>
             );
         }
 
         return appointmentsList.map(apt => {
-            const startDate = new Date(apt.scheduled_start);
-            const endDate = new Date(apt.scheduled_end);
+            const isRequest = apt.isRequest || filter === 'requested';
+            const startDate = new Date(apt.scheduled_start || apt.preferred_start);
+            const endDate = new Date(apt.scheduled_end || apt.preferred_end);
+            const itemId = isRequest ? apt.request_id : apt.appointment_id;
 
             return (
-                <div key={apt.appointment_id} style={{
+                <div key={itemId} style={{
                     background: 'white',
                     padding: '20px',
                     borderRadius: '8px',
                     marginBottom: '15px',
                     boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-                    transition: 'transform 0.2s ease'
+                    transition: 'transform 0.2s ease',
+                    position: 'relative'
                 }}
                 onMouseEnter={(e) => {
                     e.currentTarget.style.transform = 'translateY(-2px)';
@@ -1378,9 +1555,31 @@ const MyAppointments = ({ socket }) => {
                     e.currentTarget.style.transform = 'translateY(0)';
                     e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)';
                 }}>
+                    {/* Status badge - top right */}
+                    <span style={{
+                        position: 'absolute',
+                        top: '15px',
+                        right: '15px',
+                        padding: '4px 12px',
+                        borderRadius: '12px',
+                        fontSize: '12px',
+                        fontWeight: 'bold',
+                        background: isRequest 
+                            ? (apt.status === 'pending' ? '#ffc107' : 
+                               apt.status === 'approved' ? '#28a745' : 
+                               apt.status === 'declined' ? '#dc3545' : '#6c757d')
+                            : (apt.status === 'scheduled' || apt.status === 'confirmed' ? '#28a745' : 
+                               apt.status === 'completed' ? '#28a745' : 
+                               apt.status === 'cancelled' ? '#dc3545' : '#6c757d'),
+                        color: 'white',
+                        zIndex: 10
+                    }}>
+                        {isRequest ? apt.status.toUpperCase() : apt.status.toUpperCase()}
+                    </span>
+
                     <div>
-                        <h3 style={{ margin: '0 0 10px 0', color: '#333' }}>
-                            {apt.patient_name || 'N/A'}
+                        <h3 style={{ margin: '0 0 10px 0', color: '#333', paddingRight: '100px' }}>
+                            {isRequest ? 'Appointment Request' : (apt.patient_name || 'N/A')}
                         </h3>
                         <strong style={{ color: '#D84040' }}>
                             {startDate.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
@@ -1390,42 +1589,64 @@ const MyAppointments = ({ socket }) => {
                                 <AccessTime fontSize="small" /> {startDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })} - {endDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
                             </span>
                             <span style={{ marginRight: '15px', display: 'flex', alignItems: 'center', gap: '4px' }}><LocationOn fontSize="small" /> {apt.facility_name || 'N/A'}</span>
-                            {apt.provider_name && (
+                            {!isRequest && apt.provider_name && (
                                 <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><LocalHospital fontSize="small" /> {apt.provider_name}</span>
                             )}
                         </div>
                         <div style={{ marginTop: '10px' }}>
-                            <span style={{
-                                padding: '4px 8px',
-                                borderRadius: '4px',
-                                background: '#D84040',
-                                color: 'white',
-                                fontSize: '12px',
-                                marginRight: '8px'
-                            }}>
-                                {formatAppointmentType(apt.appointment_type)}
-                            </span>
-                            <span style={{
-                                padding: '4px 8px',
-                                borderRadius: '4px',
-                                background: apt.status === 'scheduled' || apt.status === 'confirmed' ? '#28a745' : 
-                                          apt.status === 'completed' ? '#28a745' : 
-                                          apt.status === 'cancelled' ? '#dc3545' : '#6c757d',
-                                color: 'white',
-                                fontSize: '12px'
-                            }}>
-                                {apt.status.toUpperCase()}
-                            </span>
+                            {!isRequest && (
+                                <span style={{
+                                    padding: '4px 8px',
+                                    borderRadius: '4px',
+                                    background: '#D84040',
+                                    color: 'white',
+                                    fontSize: '12px',
+                                    marginRight: '8px'
+                                }}>
+                                    {formatAppointmentType(apt.appointment_type || 'general')}
+                                </span>
+                            )}
+                            {isRequest && apt.appointment_id && (
+                                <span style={{
+                                    padding: '4px 8px',
+                                    borderRadius: '4px',
+                                    background: '#28a745',
+                                    color: 'white',
+                                    fontSize: '12px',
+                                    marginLeft: '8px'
+                                }}>
+                                    APPOINTMENT CREATED
+                                </span>
+                            )}
                         </div>
                         {apt.notes && (
                             <div style={{ marginTop: '10px', color: '#A31D1D', fontSize: '14px' }}>
                                 <strong>Notes:</strong> {apt.notes}
                             </div>
                         )}
+                        {isRequest && apt.decline_reason && (
+                            <div style={{ marginTop: '10px', padding: '10px', background: '#fef2f2', borderRadius: '4px', color: '#991b1b', fontSize: '14px' }}>
+                                <strong>Decline Reason:</strong> {apt.decline_reason}
+                            </div>
+                        )}
                     </div>
                     <div style={{ marginTop: '15px' }}>
-                        {/* Check if this appointment belongs to the current user */}
-                        {(() => {
+                        {/* For requests, don't show action buttons - they're pending approval */}
+                        {isRequest ? (
+                            <div style={{ 
+                                padding: '10px', 
+                                background: '#fff3cd', 
+                                borderRadius: '4px', 
+                                color: '#856404',
+                                fontSize: '14px'
+                            }}>
+                                {apt.status === 'pending' && '⏳ Awaiting case manager approval'}
+                                {apt.status === 'approved' && '✅ Request approved - appointment created'}
+                                {apt.status === 'declined' && '❌ Request declined'}
+                            </div>
+                        ) : (
+                        /* Check if this appointment belongs to the current user */
+                        (() => {
                             // For patients: only show buttons for their own appointments
                             // For physicians: show buttons for all appointments
                             const isPatientOwnAppointment = currentUserRole === 'patient' 
@@ -1496,7 +1717,8 @@ const MyAppointments = ({ socket }) => {
                                     )}
                                 </>
                             );
-                        })()}
+                        })()
+                        )}
                     </div>
                 </div>
             );
@@ -1733,6 +1955,148 @@ const MyAppointments = ({ socket }) => {
                         </div>
                     )}
                 </div>
+            </div>
+
+            {/* Filter Buttons */}
+            <div style={{
+                marginBottom: '20px',
+                display: 'flex',
+                gap: '10px',
+                flexWrap: 'wrap',
+                alignItems: 'center'
+            }}>
+                <button
+                    onClick={() => {
+                        setFilter('all');
+                        navigate('/my-appointments');
+                    }}
+                    style={{
+                        padding: '8px 16px',
+                        background: filter === 'all' ? '#A31D1D' : 'white',
+                        color: filter === 'all' ? 'white' : '#A31D1D',
+                        border: '2px solid #A31D1D',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        fontWeight: 'bold',
+                        fontSize: '14px',
+                        transition: 'all 0.2s ease'
+                    }}
+                    onMouseEnter={(e) => {
+                        if (filter !== 'all') {
+                            e.target.style.background = '#F8F2DE';
+                        }
+                    }}
+                    onMouseLeave={(e) => {
+                        if (filter !== 'all') {
+                            e.target.style.background = 'white';
+                        }
+                    }}
+                >
+                    All
+                </button>
+                <button
+                    onClick={() => {
+                        setFilter('upcoming');
+                        navigate('/my-appointments?filter=upcoming');
+                    }}
+                    style={{
+                        padding: '8px 16px',
+                        background: filter === 'upcoming' ? '#A31D1D' : 'white',
+                        color: filter === 'upcoming' ? 'white' : '#A31D1D',
+                        border: '2px solid #A31D1D',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        fontWeight: 'bold',
+                        fontSize: '14px',
+                        transition: 'all 0.2s ease'
+                    }}
+                    onMouseEnter={(e) => {
+                        if (filter !== 'upcoming') {
+                            e.target.style.background = '#F8F2DE';
+                        }
+                    }}
+                    onMouseLeave={(e) => {
+                        if (filter !== 'upcoming') {
+                            e.target.style.background = 'white';
+                        }
+                    }}
+                >
+                    Upcoming
+                </button>
+                <button
+                    onClick={() => {
+                        setFilter('past');
+                        navigate('/my-appointments?filter=past');
+                    }}
+                    style={{
+                        padding: '8px 16px',
+                        background: filter === 'past' ? '#A31D1D' : 'white',
+                        color: filter === 'past' ? 'white' : '#A31D1D',
+                        border: '2px solid #A31D1D',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        fontWeight: 'bold',
+                        fontSize: '14px',
+                        transition: 'all 0.2s ease'
+                    }}
+                    onMouseEnter={(e) => {
+                        if (filter !== 'past') {
+                            e.target.style.background = '#F8F2DE';
+                        }
+                    }}
+                    onMouseLeave={(e) => {
+                        if (filter !== 'past') {
+                            e.target.style.background = 'white';
+                        }
+                    }}
+                >
+                    Past
+                </button>
+                {currentUserRole === 'patient' && (
+                    <button
+                        onClick={() => {
+                            setFilter('requested');
+                            navigate('/my-appointments?filter=requested');
+                        }}
+                        style={{
+                            padding: '8px 16px',
+                            background: filter === 'requested' ? '#A31D1D' : 'white',
+                            color: filter === 'requested' ? 'white' : '#A31D1D',
+                            border: '2px solid #A31D1D',
+                            borderRadius: '6px',
+                            cursor: 'pointer',
+                            fontWeight: 'bold',
+                            fontSize: '14px',
+                            transition: 'all 0.2s ease',
+                            position: 'relative'
+                        }}
+                        onMouseEnter={(e) => {
+                            if (filter !== 'requested') {
+                                e.target.style.background = '#F8F2DE';
+                            }
+                        }}
+                        onMouseLeave={(e) => {
+                            if (filter !== 'requested') {
+                                e.target.style.background = 'white';
+                            }
+                        }}
+                    >
+                        Requested
+                        {appointmentRequests.filter(r => r.status === 'pending').length > 0 && (
+                            <span style={{
+                                marginLeft: '8px',
+                                background: '#28a745',
+                                color: 'white',
+                                borderRadius: '10px',
+                                padding: '2px 6px',
+                                fontSize: '11px',
+                                fontWeight: 'bold'
+                            }}>
+                                {appointmentRequests.filter(r => r.status === 'pending').length}
+                            </span>
+                        )}
+                    </button>
+                )}
             </div>
 
             {/* 2-Column Layout */}
@@ -2134,27 +2498,36 @@ const MyAppointments = ({ socket }) => {
     );
 };
 
-const MyAppointmentModal = ({ mode, appointment, facilities, providers, currentUserRole, currentPatientId, currentProviderId, onClose, onSave }) => {
+const MyAppointmentModal = ({ mode, appointment, facilities, providers: initialProviders, currentUserRole, currentPatientId, currentProviderId, onClose, onSave }) => {
     const parseDateTime = (dateTimeString) => {
-        if (!dateTimeString) return { date: '', time: '' };
+        if (!dateTimeString) return { date: '', startTime: '', endTime: '' };
         const date = new Date(dateTimeString);
         if (isNaN(date.getTime())) {
             const parts = dateTimeString.split(' ');
             if (parts.length === 2) {
                 return {
                     date: parts[0],
-                    time: parts[1].slice(0, 5)
+                    startTime: parts[1].slice(0, 5),
+                    endTime: ''
                 };
             }
-            return { date: '', time: '' };
+            return { date: '', startTime: '', endTime: '' };
         }
         return {
             date: date.toISOString().split('T')[0],
-            time: date.toTimeString().slice(0, 5)
+            startTime: date.toTimeString().slice(0, 5),
+            endTime: ''
         };
     };
 
-    const parsedDateTime = appointment ? parseDateTime(appointment.scheduled_start) : { date: '', time: '' };
+    const parsedDateTime = appointment ? parseDateTime(appointment.scheduled_start) : { date: '', startTime: '', endTime: '' };
+    
+    // Calculate end time from appointment if available
+    let endTime = '';
+    if (appointment && appointment.scheduled_end) {
+        const endDate = new Date(appointment.scheduled_end);
+        endTime = endDate.toTimeString().slice(0, 5);
+    }
 
     const [formData, setFormData] = useState(
         appointment ? {
@@ -2162,7 +2535,8 @@ const MyAppointmentModal = ({ mode, appointment, facilities, providers, currentU
             provider_id: appointment.provider_id || '',
             appointment_type: appointment.appointment_type,
             appointmentDate: parsedDateTime.date,
-            appointmentTime: parsedDateTime.time,
+            appointmentTime: parsedDateTime.startTime,
+            appointmentEndTime: endTime || '',
             duration_minutes: appointment.duration_minutes || 30,
             reason: appointment.reason || '',
             notes: appointment.notes || ''
@@ -2172,22 +2546,95 @@ const MyAppointmentModal = ({ mode, appointment, facilities, providers, currentU
             appointment_type: '',
             appointmentDate: '',
             appointmentTime: '',
+            appointmentEndTime: '',
             duration_minutes: 30,
             reason: '',
             notes: ''
         }
     );
 
+    const [providers, setProviders] = useState(initialProviders || []);
+    const getAuthToken = () => localStorage.getItem('token');
+
+    // Fetch providers when facility changes
+    useEffect(() => {
+        if (formData.facility_id) {
+            console.log('Fetching providers for facility:', formData.facility_id);
+            fetch(`${API_BASE_URL}/doctor-assignments/providers?facility_id=${formData.facility_id}`, {
+                headers: { Authorization: `Bearer ${getAuthToken()}` }
+            })
+            .then(res => {
+                console.log('Provider fetch response status:', res.status);
+                if (!res.ok) {
+                    throw new Error(`HTTP error! status: ${res.status}`);
+                }
+                return res.json();
+            })
+            .then(data => {
+                console.log('Provider fetch data:', data);
+                if (data.success && data.providers) {
+                    console.log('Setting providers:', data.providers.length);
+                    setProviders(data.providers);
+                } else {
+                    console.warn('No providers found or invalid response:', data);
+                    setProviders([]);
+                }
+            })
+            .catch(err => {
+                console.error('Error fetching providers:', err);
+                setProviders([]);
+            });
+        } else {
+            setProviders(initialProviders || []);
+        }
+    }, [formData.facility_id, initialProviders]);
+
+    // Calculate minimum date (today - allow same-day appointments)
+    const getMinDate = () => {
+        const today = new Date();
+        return today.toISOString().split('T')[0];
+    };
+
     const handleSubmit = (e) => {
         e.preventDefault();
+        // Calculate duration from time range if end time is provided
+        if (formData.appointmentEndTime) {
+            const start = new Date(`${formData.appointmentDate}T${formData.appointmentTime}`);
+            const end = new Date(`${formData.appointmentDate}T${formData.appointmentEndTime}`);
+            const durationMinutes = Math.round((end - start) / 60000);
+            if (durationMinutes > 0) {
+                formData.duration_minutes = durationMinutes;
+            }
+        }
         onSave(formData);
     };
 
     const handleChange = (e) => {
-        setFormData({
+        const newFormData = {
             ...formData,
             [e.target.name]: e.target.value
-        });
+        };
+        
+        // Auto-calculate end time when start time or duration changes
+        if (e.target.name === 'appointmentTime' || e.target.name === 'duration_minutes') {
+            if (newFormData.appointmentDate && newFormData.appointmentTime && newFormData.duration_minutes) {
+                const start = new Date(`${newFormData.appointmentDate}T${newFormData.appointmentTime}`);
+                const end = new Date(start.getTime() + (newFormData.duration_minutes * 60000));
+                newFormData.appointmentEndTime = end.toTimeString().slice(0, 5);
+            }
+        }
+        
+        // Auto-calculate duration when end time changes
+        if (e.target.name === 'appointmentEndTime' && newFormData.appointmentDate && newFormData.appointmentTime) {
+            const start = new Date(`${newFormData.appointmentDate}T${newFormData.appointmentTime}`);
+            const end = new Date(`${newFormData.appointmentDate}T${newFormData.appointmentEndTime}`);
+            const durationMinutes = Math.round((end - start) / 60000);
+            if (durationMinutes > 0) {
+                newFormData.duration_minutes = durationMinutes;
+            }
+        }
+        
+        setFormData(newFormData);
     };
 
     return (
@@ -2235,18 +2682,38 @@ const MyAppointmentModal = ({ mode, appointment, facilities, providers, currentU
                     </button>
                 </div>
                 <form onSubmit={handleSubmit}>
+                    <div style={{ marginBottom: '15px' }}>
+                        <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
+                            Date <span style={{ color: 'red' }}>*</span>
+                        </label>
+                        <input 
+                            type="date"
+                            name="appointmentDate"
+                            value={formData.appointmentDate}
+                            onChange={handleChange}
+                            required
+                            min={getMinDate()}
+                            style={{
+                                width: '100%',
+                                padding: '8px',
+                                border: '1px solid #ced4da',
+                                borderRadius: '4px'
+                            }}
+                        />
+                    </div>
+
                     <div className="form-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', marginBottom: '15px' }}>
                         <div>
                             <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
-                                Date <span style={{ color: 'red' }}>*</span>
+                                Start Time <span style={{ color: 'red' }}>*</span>
                             </label>
                             <input 
-                                type="date"
-                                name="appointmentDate"
-                                value={formData.appointmentDate}
+                                type="time"
+                                name="appointmentTime"
+                                value={formData.appointmentTime}
                                 onChange={handleChange}
                                 required
-                                min={new Date().toISOString().split('T')[0]}
+                                step="3600"
                                 style={{
                                     width: '100%',
                                     padding: '8px',
@@ -2257,14 +2724,15 @@ const MyAppointmentModal = ({ mode, appointment, facilities, providers, currentU
                         </div>
                         <div>
                             <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
-                                Time <span style={{ color: 'red' }}>*</span>
+                                End Time <span style={{ color: 'red' }}>*</span>
                             </label>
                             <input 
                                 type="time"
-                                name="appointmentTime"
-                                value={formData.appointmentTime}
+                                name="appointmentEndTime"
+                                value={formData.appointmentEndTime}
                                 onChange={handleChange}
                                 required
+                                step="3600"
                                 style={{
                                     width: '100%',
                                     padding: '8px',
@@ -2303,75 +2771,90 @@ const MyAppointmentModal = ({ mode, appointment, facilities, providers, currentU
                     {currentUserRole === 'patient' && (
                         <div style={{ marginBottom: '15px' }}>
                             <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
-                                Provider (Doctor)
+                                Provider (Doctor) - From Doctor Assignments
                             </label>
                             <select 
                                 name="provider_id"
                                 value={formData.provider_id}
                                 onChange={handleChange}
+                                disabled={!formData.facility_id}
                                 style={{
                                     width: '100%',
                                     padding: '8px',
                                     border: '1px solid #ced4da',
-                                    borderRadius: '4px'
+                                    borderRadius: '4px',
+                                    backgroundColor: !formData.facility_id ? '#f8f9fa' : 'white'
                                 }}
                             >
-                                <option value="">Select Provider (Optional)</option>
+                                <option value="">
+                                    {!formData.facility_id 
+                                        ? 'Select Facility First' 
+                                        : providers.length === 0 
+                                            ? 'No providers available for this facility' 
+                                            : 'Select Provider (Optional)'}
+                                </option>
                                 {providers.map(provider => (
-                                    <option key={provider.user_id} value={provider.user_id}>
-                                        {provider.full_name || provider.username} {provider.facility_name ? `(${provider.facility_name})` : ''}
+                                    <option key={provider.provider_id || provider.user_id} value={provider.provider_id || provider.user_id}>
+                                        {provider.provider_name || provider.full_name || provider.username} {provider.facility_name ? `(${provider.facility_name})` : ''}
                                     </option>
                                 ))}
                             </select>
+                            {formData.facility_id && providers.length === 0 && (
+                                <p style={{ marginTop: '5px', fontSize: '12px', color: '#6c757d', fontStyle: 'italic' }}>
+                                    No providers with active doctor assignments found for this facility. You can still book without selecting a provider.
+                                </p>
+                            )}
                         </div>
                     )}
 
-                    <div className="form-grid" style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '15px', marginBottom: '15px' }}>
-                        <div>
-                            <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
-                                Appointment Type <span style={{ color: 'red' }}>*</span>
-                            </label>
-                            <select 
-                                name="appointment_type"
-                                value={formData.appointment_type}
-                                onChange={handleChange}
-                                required
-                                style={{
-                                    width: '100%',
-                                    padding: '8px',
-                                    border: '1px solid #ced4da',
-                                    borderRadius: '4px'
-                                }}
-                            >
-                                <option value="">Select Type</option>
-                                <option value="initial">Initial Consultation</option>
-                                <option value="follow_up">Follow-up Consultation</option>
-                                <option value="art_pickup">ART Pickup</option>
-                                <option value="lab_test">Lab Test</option>
-                                <option value="counseling">Counseling</option>
-                                <option value="general">General</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
-                                Duration (minutes)
-                            </label>
-                            <input 
-                                type="number"
-                                name="duration_minutes"
-                                value={formData.duration_minutes}
-                                onChange={handleChange}
-                                min="15"
-                                max="240"
-                                step="15"
-                                style={{
-                                    width: '100%',
-                                    padding: '8px',
-                                    border: '1px solid #ced4da',
-                                    borderRadius: '4px'
-                                }}
-                            />
-                        </div>
+                    <div style={{ marginBottom: '15px' }}>
+                        <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
+                            Appointment Type <span style={{ color: 'red' }}>*</span>
+                        </label>
+                        <select 
+                            name="appointment_type"
+                            value={formData.appointment_type}
+                            onChange={handleChange}
+                            required
+                            style={{
+                                width: '100%',
+                                padding: '8px',
+                                border: '1px solid #ced4da',
+                                borderRadius: '4px'
+                            }}
+                        >
+                            <option value="">Select Type</option>
+                            <option value="initial">Initial Consultation</option>
+                            <option value="follow_up">Follow-up Consultation</option>
+                            <option value="art_pickup">ART Pickup</option>
+                            <option value="lab_test">Lab Test</option>
+                            <option value="counseling">Counseling</option>
+                            <option value="general">General</option>
+                        </select>
+                    </div>
+
+                    <div style={{ marginBottom: '15px' }}>
+                        <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
+                            Duration (minutes) - Auto-calculated from time range
+                        </label>
+                        <input 
+                            type="number"
+                            name="duration_minutes"
+                            value={formData.duration_minutes}
+                            onChange={handleChange}
+                            min="15"
+                            max="240"
+                            step="15"
+                            readOnly
+                            style={{
+                                width: '100%',
+                                padding: '8px',
+                                border: '1px solid #ced4da',
+                                borderRadius: '4px',
+                                backgroundColor: '#f8f9fa',
+                                cursor: 'not-allowed'
+                            }}
+                        />
                     </div>
 
                     <div style={{ marginBottom: '15px' }}>
