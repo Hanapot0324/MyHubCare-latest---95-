@@ -611,4 +611,168 @@ router.get('/stats/overview', authenticateToken, async (req, res) => {
   }
 });
 
+
+// GET /api/patients/by-user/:userId - Get patient by user ID
+router.get('/by-user/:userId', authenticateToken, async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    // Users can view their own patient record, or admin/physician can view any
+    if (req.user.user_id !== userId && !['admin', 'physician'].includes(req.user.role)) {
+      return res.status(403).json({ success: false, message: 'Access denied' });
+    }
+
+    const [patients] = await db.query(
+      `SELECT p.*, f.facility_name 
+       FROM patients p
+       LEFT JOIN facilities f ON p.facility_id = f.facility_id
+       WHERE p.created_by = ?`,
+      [userId]
+    );
+
+    if (patients.length === 0) {
+      return res.status(404).json({ success: false, message: 'Patient not found' });
+    }
+
+    res.json({ success: true, patient: patients[0] });
+  } catch (err) {
+    console.error('Fetch patient by user ID error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+
+// Add this to your patients.js file, after the existing endpoints
+
+// GET /api/patients/by-email/:email - Get patient by email
+router.get('/by-email/:email', authenticateToken, async (req, res) => {
+  try {
+    const { email } = req.params;
+
+    // Users can view their own patient record, or admin/physician can view any
+    if (req.user.email !== email && !['admin', 'physician'].includes(req.user.role)) {
+      return res.status(403).json({ success: false, message: 'Access denied' });
+    }
+
+    const [patients] = await db.query(
+      `SELECT p.*, f.facility_name 
+       FROM patients p
+       LEFT JOIN facilities f ON p.facility_id = f.facility_id
+       WHERE p.email = ?`,
+      [email]
+    );
+
+    if (patients.length === 0) {
+      return res.status(404).json({ success: false, message: 'Patient not found' });
+    }
+
+    res.json({ success: true, patient: patients[0] });
+  } catch (err) {
+    console.error('Fetch patient by email error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+
+// Add this to your patients.js file, after the existing endpoints
+
+// GET /api/patients/find-patient - Find patient by various criteria
+router.get('/find-patient', authenticateToken, async (req, res) => {
+  try {
+    const { userId, email, username } = req.query;
+    
+    // Users can view their own patient record, or admin/physician can view any
+    if (req.user.user_id !== userId && req.user.email !== email && req.user.username !== username && 
+        !['admin', 'physician'].includes(req.user.role)) {
+      return res.status(403).json({ success: false, message: 'Access denied' });
+    }
+
+    let patients = [];
+    
+    // Try to find by email first
+    if (email) {
+      const [patientsByEmail] = await db.query(
+        `SELECT p.*, f.facility_name 
+         FROM patients p
+         LEFT JOIN facilities f ON p.facility_id = f.facility_id
+         WHERE p.email = ?`,
+        [email]
+      );
+      patients = patientsByEmail;
+    }
+    
+    // If not found by email, try by username
+    if (patients.length === 0 && username) {
+      // First find the user with this username
+      const [users] = await db.query(
+        'SELECT email FROM users WHERE username = ?',
+        [username]
+      );
+      
+      if (users.length > 0) {
+        const [patientsByUsername] = await db.query(
+          `SELECT p.*, f.facility_name 
+           FROM patients p
+           LEFT JOIN facilities f ON p.facility_id = f.facility_id
+           WHERE p.email = ?`,
+          [users[0].email]
+        );
+        patients = patientsByUsername;
+      }
+    }
+    
+    // If still not found, try by user_id as created_by
+    if (patients.length === 0 && userId) {
+      const [patientsByUserId] = await db.query(
+        `SELECT p.*, f.facility_name 
+         FROM patients p
+         LEFT JOIN facilities f ON p.facility_id = f.facility_id
+         WHERE p.created_by = ?`,
+        [userId]
+      );
+      patients = patientsByUserId;
+    }
+
+    if (patients.length === 0) {
+      return res.status(404).json({ success: false, message: 'Patient not found' });
+    }
+
+    res.json({ success: true, patient: patients[0] });
+  } catch (err) {
+    console.error('Find patient error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// Add this to your patients.js file, after the existing endpoints
+
+// GET /api/patients/by-creator/:userId - Get patient by the user who created them
+router.get('/by-creator/:userId', authenticateToken, async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    // Users can view their own patient record, or admin/physician can view any
+    if (req.user.user_id !== userId && !['admin', 'physician'].includes(req.user.role)) {
+      return res.status(403).json({ success: false, message: 'Access denied' });
+    }
+
+    const [patients] = await db.query(
+      `SELECT p.*, f.facility_name 
+       FROM patients p
+       LEFT JOIN facilities f ON p.facility_id = f.facility_id
+       WHERE p.created_by = ?`,
+      [userId]
+    );
+
+    if (patients.length === 0) {
+      return res.status(404).json({ success: false, message: 'Patient not found' });
+    }
+
+    res.json({ success: true, patient: patients[0] });
+  } catch (err) {
+    console.error('Fetch patient by creator error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
 export default router;

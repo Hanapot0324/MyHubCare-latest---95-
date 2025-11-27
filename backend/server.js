@@ -44,6 +44,10 @@ import auditLogsRoutes from './routes/audit-logs.js';
 import surveyResponsesRoutes from './routes/survey-responses.js';
 import surveyMetricsRoutes from './routes/survey-metrics.js';
 import artRegimensRoutes from './routes/art-regimens.js';
+import learningModulesRoutes from './routes/learning-modules.js';
+import forumRoutes from './routes/forum.js';
+import refillRequestRoutes from './routes/refill-requests.js';
+
 import { processAppointmentReminders, processMedicationReminders, setSocketIO as setReminderServiceSocketIO } from './services/reminderService.js';
 
 const app = express();
@@ -124,6 +128,9 @@ app.use('/api/audit-logs', auditLogsRoutes);
 app.use('/api/survey-responses', surveyResponsesRoutes);
 app.use('/api/survey-metrics', surveyMetricsRoutes);
 app.use('/api/art-regimens', artRegimensRoutes);
+app.use('/api/learning-modules', learningModulesRoutes);
+app.use('/api/forum', forumRoutes);
+app.use('/api/refill-requests', refillRequestRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

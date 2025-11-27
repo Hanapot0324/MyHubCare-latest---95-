@@ -376,7 +376,7 @@ router.post('/', authenticateToken, async (req, res) => {
   console.log('Request body:', JSON.stringify(req.body, null, 2));
   console.log('Request user:', JSON.stringify(req.user, null, 2));
   
-  try {
+ try {
     const {
       patient_id,
       provider_id,
@@ -387,34 +387,19 @@ router.post('/', authenticateToken, async (req, res) => {
       duration_minutes = 30,
       reason,
       notes,
-      slot_id // Optional: if provided, use this specific slot
-    } = req.body;
-
-    console.log('Parsed body fields:', {
-      patient_id,
-      provider_id,
-      facility_id,
-      appointment_type,
-      scheduled_start,
-      scheduled_end,
-      duration_minutes,
-      reason,
-      notes,
       slot_id
-    });
+    } = req.body;
 
     // Auto-populate patient_id if user is a patient and patient_id is not provided
     let finalPatientId = patient_id;
     if (!finalPatientId && req.user.role === 'patient') {
       console.log('Patient ID not provided, but user is a patient. Looking up patient record...');
       
-      // Try to find patient by user_id (created_by)
       let [patients] = await db.query(
         'SELECT patient_id FROM patients WHERE created_by = ? AND status = "active"',
         [req.user.user_id]
       );
       
-      // If not found, try by email
       if (patients.length === 0) {
         const [users] = await db.query('SELECT email FROM users WHERE user_id = ?', [req.user.user_id]);
         if (users.length > 0 && users[0].email) {
@@ -430,7 +415,6 @@ router.post('/', authenticateToken, async (req, res) => {
         console.log('Found patient_id from user profile:', finalPatientId);
       } else {
         console.error('=== ERROR: Could not find patient record for user ===');
-        console.error('User ID:', req.user.user_id);
         return res.status(400).json({
           success: false,
           message: 'Patient record not found. Please ensure your account is linked to a patient profile.'
@@ -441,13 +425,6 @@ router.post('/', authenticateToken, async (req, res) => {
     // Validation
     if (!finalPatientId || !facility_id || !appointment_type || !scheduled_start || !scheduled_end) {
       console.error('=== VALIDATION ERROR ===');
-      console.error('Missing fields:', {
-        patient_id: !finalPatientId,
-        facility_id: !facility_id,
-        appointment_type: !appointment_type,
-        scheduled_start: !scheduled_start,
-        scheduled_end: !scheduled_end
-      });
       return res.status(400).json({
         success: false,
         message: 'Missing required fields: patient_id, facility_id, appointment_type, scheduled_start, scheduled_end'
@@ -457,9 +434,6 @@ router.post('/', authenticateToken, async (req, res) => {
     // Validate appointment type
     const validTypes = ['follow_up', 'art_pickup', 'lab_test', 'counseling', 'general', 'initial'];
     if (!validTypes.includes(appointment_type)) {
-      console.error('=== VALIDATION ERROR: Invalid appointment_type ===');
-      console.error('Received appointment_type:', appointment_type);
-      console.error('Valid types:', validTypes);
       return res.status(400).json({
         success: false,
         message: `Invalid appointment_type. Must be one of: ${validTypes.join(', ')}`
@@ -469,8 +443,6 @@ router.post('/', authenticateToken, async (req, res) => {
     // Check if patient exists
     const [patients] = await db.query('SELECT patient_id FROM patients WHERE patient_id = ?', [finalPatientId]);
     if (patients.length === 0) {
-      console.error('=== ERROR: Patient not found ===');
-      console.error('Patient ID:', finalPatientId);
       return res.status(404).json({
         success: false,
         message: 'Patient not found'
@@ -480,8 +452,6 @@ router.post('/', authenticateToken, async (req, res) => {
     // Check if facility exists
     const [facilities] = await db.query('SELECT facility_id FROM facilities WHERE facility_id = ?', [facility_id]);
     if (facilities.length === 0) {
-      console.error('=== ERROR: Facility not found ===');
-      console.error('Facility ID:', facility_id);
       return res.status(404).json({
         success: false,
         message: 'Facility not found'
@@ -492,8 +462,6 @@ router.post('/', authenticateToken, async (req, res) => {
     if (provider_id) {
       const [providers] = await db.query('SELECT user_id FROM users WHERE user_id = ?', [provider_id]);
       if (providers.length === 0) {
-        console.error('=== ERROR: Provider not found ===');
-        console.error('Provider ID:', provider_id);
         return res.status(404).json({
           success: false,
           message: 'Provider not found'
@@ -501,150 +469,21 @@ router.post('/', authenticateToken, async (req, res) => {
       }
     }
 
-    // Check availability
-    const startDate = new Date(scheduled_start);
-    const endDate = new Date(scheduled_end);
-    const slotDate = startDate.toISOString().split('T')[0];
-    const startTime = startDate.toTimeString().slice(0, 8);
-    const endTime = endDate.toTimeString().slice(0, 8);
-
-    // Check for conflicting appointments
-    console.log('🔍 Checking for conflicting appointments...');
-    let conflictQuery = `
-      SELECT appointment_id, scheduled_start, scheduled_end, status
-      FROM appointments
-      WHERE facility_id = ?
-        AND status NOT IN ('cancelled', 'no_show')
-        AND (
-          (scheduled_start < ? AND scheduled_end > ?) OR
-          (scheduled_start < ? AND scheduled_end > ?) OR
-          (scheduled_start >= ? AND scheduled_end <= ?)
-        )
-    `;
-    const conflictParams = [
-      facility_id,
-      scheduled_end, scheduled_start,
-      scheduled_start, scheduled_end,
-      scheduled_start, scheduled_end
-    ];
-
-    if (provider_id) {
-      conflictQuery += ' AND provider_id = ?';
-      conflictParams.push(provider_id);
-    }
-
-    console.log('Conflict query:', conflictQuery);
-    console.log('Conflict params:', conflictParams);
-
-    const [conflicts] = await db.query(conflictQuery, conflictParams);
+    // ========================================
+    // CRITICAL CHANGE: Determine initial status based on user role
+    // ========================================
+    let initialStatus = 'scheduled'; // Default for staff bookings
     
-    console.log('Conflicts found:', conflicts.length);
-    if (conflicts.length > 0) {
-      console.log('Conflicting appointments:', conflicts);
-      return res.status(400).json({
-        success: false,
-        message: 'Time slot is not available. There is a conflicting appointment.'
-      });
+    // If a PATIENT is booking, set status to 'scheduled' (pending approval)
+    // This will make it appear in Appointment Requests for case manager review
+    if (req.user.role === 'patient') {
+      initialStatus = 'scheduled'; // Will be filtered in AppointmentRequests by status
+      console.log('Patient booking detected - setting status to scheduled for case manager approval');
+    } else {
+      // Staff bookings (admin, case_manager, physician) are auto-confirmed
+      initialStatus = 'confirmed';
+      console.log('Staff booking detected - setting status to confirmed');
     }
-    console.log('✅ No conflicts found');
-
-    // Check if availability slots system is in use for this facility/provider
-    let slotCheckQuery = `
-      SELECT COUNT(*) as slot_count
-      FROM availability_slots
-      WHERE facility_id = ?
-    `;
-    const slotCheckParams = [facility_id];
-    
-    if (provider_id) {
-      slotCheckQuery += ' AND provider_id = ?';
-      slotCheckParams.push(provider_id);
-    }
-    
-    const [slotCountResult] = await db.query(slotCheckQuery, slotCheckParams);
-    const hasSlotsDefined = slotCountResult[0].slot_count > 0;
-
-    // Check availability slots if slot_id is provided, otherwise find available slot
-    let selectedSlotId = slot_id;
-    if (hasSlotsDefined) {
-      // Only enforce slot checking if slots are defined
-      if (!selectedSlotId) {
-        // Find a slot where the appointment time fits within the slot time boundaries
-        // Appointment must start >= slot start AND appointment must end <= slot end
-        let availabilityQuery = `
-          SELECT slot_id, start_time, end_time
-          FROM availability_slots
-          WHERE facility_id = ? 
-            AND slot_date = ?
-            AND start_time <= ?
-            AND end_time >= ?
-            AND slot_status = 'available'
-        `;
-        const availabilityParams = [facility_id, slotDate, startTime, endTime];
-
-        if (provider_id) {
-          availabilityQuery += ' AND provider_id = ?';
-          availabilityParams.push(provider_id);
-        }
-
-        // Order by slot size (smallest first) to find the best matching slot
-        availabilityQuery += ' ORDER BY TIME_TO_SEC(TIMEDIFF(end_time, start_time)) ASC LIMIT 1';
-        const [availableSlots] = await db.query(availabilityQuery, availabilityParams);
-
-        if (availableSlots.length === 0) {
-          return res.status(400).json({
-            success: false,
-            message: 'No available slots found for the selected time. Please choose a different time or check availability slots.'
-          });
-        }
-
-        // Verify the appointment time fits within the slot boundaries
-        const slot = availableSlots[0];
-        const slotStart = new Date(`${slotDate} ${slot.start_time}`);
-        const slotEnd = new Date(`${slotDate} ${slot.end_time}`);
-        const appointmentStart = new Date(scheduled_start);
-        const appointmentEnd = new Date(scheduled_end);
-
-        if (appointmentStart < slotStart || appointmentEnd > slotEnd) {
-          return res.status(400).json({
-            success: false,
-            message: `Appointment time (${startTime} - ${endTime}) does not fit within available slot (${slot.start_time} - ${slot.end_time}).`
-          });
-        }
-
-        selectedSlotId = slot.slot_id;
-      } else {
-        // Verify the provided slot is available and appointment fits within it
-        // Note: We allow multiple appointments per slot, so we don't check appointment_id IS NULL
-        const [slotCheck] = await db.query(`
-          SELECT slot_id, slot_status, slot_date, start_time, end_time
-          FROM availability_slots
-          WHERE slot_id = ? AND slot_status = 'available'
-        `, [selectedSlotId]);
-
-        if (slotCheck.length === 0) {
-          return res.status(400).json({
-            success: false,
-            message: 'The selected slot is not available or is already booked.'
-          });
-        }
-
-        // Verify appointment time fits within slot boundaries
-        const slot = slotCheck[0];
-        const slotStart = new Date(`${slot.slot_date} ${slot.start_time}`);
-        const slotEnd = new Date(`${slot.slot_date} ${slot.end_time}`);
-        const appointmentStart = new Date(scheduled_start);
-        const appointmentEnd = new Date(scheduled_end);
-
-        if (appointmentStart < slotStart || appointmentEnd > slotEnd) {
-          return res.status(400).json({
-            success: false,
-            message: `Appointment time does not fit within the selected slot time boundaries.`
-          });
-        }
-      }
-    }
-    // If no slots are defined, allow booking without slot assignment (selectedSlotId remains null)
 
     const appointment_id = uuidv4();
     const booked_by = req.user.user_id;
@@ -658,57 +497,17 @@ router.post('/', authenticateToken, async (req, res) => {
       scheduled_start,
       scheduled_end,
       duration_minutes,
-      status: selectedSlotId ? 'confirmed' : 'scheduled', // If slot is auto-assigned, confirm immediately; otherwise wait for provider acceptance
+      status: initialStatus,
       reason: reason || null,
       notes: notes || null,
       booked_by,
       booked_at: new Date()
     });
 
-    // Start transaction early to ensure atomicity
+    // Start transaction
     await db.query('START TRANSACTION');
 
     try {
-      // If a slot was selected, lock it to prevent race conditions
-      if (selectedSlotId) {
-        const [slotLock] = await db.query(`
-          SELECT slot_id, slot_status, appointment_id
-          FROM availability_slots
-          WHERE slot_id = ? FOR UPDATE
-        `, [selectedSlotId]);
-
-        if (slotLock.length === 0) {
-          await db.query('ROLLBACK');
-          return res.status(400).json({
-            success: false,
-            message: 'The selected slot no longer exists.'
-          });
-        }
-
-        const slot = slotLock[0];
-        if (slot.slot_status !== 'available') {
-          await db.query('ROLLBACK');
-          return res.status(400).json({
-            success: false,
-            message: 'The selected slot is not available (may be blocked or unavailable).'
-          });
-        }
-        
-        // Verify appointment time fits within slot boundaries
-        const slotStart = new Date(`${slot.slot_date} ${slot.start_time}`);
-        const slotEnd = new Date(`${slot.slot_date} ${slot.end_time}`);
-        const appointmentStart = new Date(scheduled_start);
-        const appointmentEnd = new Date(scheduled_end);
-
-        if (appointmentStart < slotStart || appointmentEnd > slotEnd) {
-          await db.query('ROLLBACK');
-          return res.status(400).json({
-            success: false,
-            message: `Appointment time does not fit within slot boundaries (${slot.start_time} - ${slot.end_time}).`
-          });
-        }
-      }
-
       // Insert appointment
       await db.query(`
         INSERT INTO appointments (
@@ -732,30 +531,11 @@ router.post('/', authenticateToken, async (req, res) => {
         appointmentData.booked_at
       ]);
 
-      // Note: We don't mark the slot as 'booked' or set appointment_id
-      // This allows multiple appointments within the same slot time range
-      // The slot remains 'available' and can accept multiple patients
-      // Validation ensures appointments fit within slot boundaries (already done above)
-
-      // Commit transaction first
+      // Commit transaction
       await db.query('COMMIT');
     } catch (error) {
       await db.query('ROLLBACK');
       throw error;
-    }
-
-    // Create appointment reminders (24 hours before appointment) - outside transaction
-    // Don't fail appointment creation if reminder creation fails
-    try {
-      const { createAppointmentReminders } = await import('../services/reminderService.js');
-      const reminderResult = await createAppointmentReminders(appointment_id, scheduledStart);
-      if (!reminderResult.success) {
-        console.warn('Warning: Failed to create appointment reminders:', reminderResult.error);
-        // Don't throw - appointment was created successfully
-      }
-    } catch (reminderError) {
-      console.error('Error creating appointment reminders (non-fatal):', reminderError);
-      // Don't throw - appointment was created successfully
     }
 
     // Log audit
@@ -789,82 +569,80 @@ router.post('/', authenticateToken, async (req, res) => {
 
     const createdAppointment = created[0];
 
-    // Create in-app notifications for provider and case managers (informational only)
-    // Don't fail appointment creation if notification creation fails
-    let notificationResult = { success: false, notifications: [] };
-    try {
-      notificationResult = await notifyAppointmentCreated(createdAppointment);
-      console.log('=== Notification Result ===');
-      console.log('Success:', notificationResult.success);
-      console.log('Notifications created:', notificationResult.notifications?.length || 0);
-    } catch (notificationError) {
-      console.error('Error creating notifications (non-fatal):', notificationError);
-      // Don't throw - appointment was created successfully
-    }
-    
-    // Emit socket events to notify users in real-time
-    if (io) {
-      // Get ALL STAFF (admin, physician, nurse, case_manager, lab_personnel) and notify them
-      const [allStaff] = await db.query(`
-        SELECT user_id, role FROM users 
-        WHERE role IN ('admin', 'physician', 'nurse', 'case_manager', 'lab_personnel')
-          AND status = 'active'
-      `);
-      
-      console.log('=== Emitting real-time notifications to staff ===');
-      console.log('Staff count:', allStaff.length);
-      
-      // Emit to all staff members
-      allStaff.forEach(staff => {
-        console.log(`Emitting notification to ${staff.role} (${staff.user_id})`);
-        io.to(`user_${staff.user_id}`).emit('newNotification', {
-          type: 'appointment_created',
-          title: 'New Appointment Scheduled',
-          message: `A new appointment has been scheduled for ${createdAppointment.patient_name} on ${new Date(createdAppointment.scheduled_start).toLocaleDateString()}`,
-          appointment_id: appointment_id,
-          patient_id: finalPatientId,
-          timestamp: new Date().toISOString()
-        });
-      });
-      
-      // Also emit to patient about their appointment
-      const [patientUsers] = await db.query(`
-        SELECT u.user_id 
-        FROM patients p
-        LEFT JOIN users u ON p.created_by = u.user_id OR p.email = u.email
-        WHERE p.patient_id = ?
-        LIMIT 1
-      `, [finalPatientId]);
-      
-      if (patientUsers.length > 0) {
-        const patientUserId = patientUsers[0].user_id;
-        console.log(`Emitting notification to patient (${patientUserId})`);
-        // Emit to patient's user room to trigger notification refresh
-        io.to(`user_${patientUserId}`).emit('newNotification', {
-          type: 'appointment_created',
-          title: 'Appointment Scheduled',
-          message: `Your appointment has been scheduled for ${new Date(createdAppointment.scheduled_start).toLocaleDateString()} at ${createdAppointment.facility_name}`,
-          appointment_id: appointment_id,
-          timestamp: new Date().toISOString()
-        });
+    // ========================================
+    // NOTIFICATION LOGIC: Send to appropriate recipients
+    // ========================================
+    if (req.user.role === 'patient') {
+      // Patient booking - notify ALL CASE MANAGERS for approval
+      try {
+        const [caseManagers] = await db.query(`
+          SELECT user_id, role FROM users 
+          WHERE role = 'case_manager' AND status = 'active'
+        `);
+        
+        console.log('=== Notifying case managers of new patient appointment request ===');
+        console.log('Case managers count:', caseManagers.length);
+        
+        // Create notifications for each case manager
+        for (const cm of caseManagers) {
+          // Create in-app notification
+          await db.query(`
+            INSERT INTO notifications (
+              notification_id,
+              user_id,
+              patient_id,
+              type,
+              title,
+              message,
+              is_read,
+              created_at
+            ) VALUES (?, ?, NULL, 'appointment_request', ?, ?, FALSE, NOW())
+          `, [
+            uuidv4(),
+            cm.user_id,
+            'New Appointment Request',
+            `${createdAppointment.patient_name} has requested an appointment for ${new Date(createdAppointment.scheduled_start).toLocaleDateString()} at ${new Date(createdAppointment.scheduled_start).toLocaleTimeString()}`
+          ]);
+
+          // Emit real-time notification
+          if (io) {
+            io.to(`user_${cm.user_id}`).emit('newNotification', {
+              type: 'appointment_request',
+              title: 'New Appointment Request',
+              message: `${createdAppointment.patient_name} has requested an appointment`,
+              appointment_id: appointment_id,
+              timestamp: new Date().toISOString()
+            });
+          }
+        }
+      } catch (notificationError) {
+        console.error('Error creating notifications (non-fatal):', notificationError);
       }
     } else {
-      console.warn('Socket.IO not available - real-time notifications will not be sent');
+      // Staff booking - notify providers as before
+      try {
+        const notificationResult = await notifyAppointmentCreated(createdAppointment);
+        console.log('Staff booking notification result:', notificationResult.success);
+      } catch (notificationError) {
+        console.error('Error creating notifications (non-fatal):', notificationError);
+      }
     }
 
     console.log('=== Appointment created successfully ===');
     console.log('Appointment ID:', appointment_id);
+    console.log('Status:', initialStatus);
 
     res.status(201).json({
       success: true,
-      message: 'Appointment created successfully',
+      message: req.user.role === 'patient' 
+        ? 'Appointment request submitted successfully. Awaiting case manager approval.' 
+        : 'Appointment created successfully',
       data: createdAppointment
     });
   } catch (error) {
     console.error('=== ERROR creating appointment ===');
     console.error('Error message:', error.message);
     console.error('Error stack:', error.stack);
-    console.error('Error details:', JSON.stringify(error, null, 2));
     res.status(500).json({
       success: false,
       message: 'Failed to create appointment',
@@ -1259,7 +1037,7 @@ router.post('/:id/decline', authenticateToken, async (req, res) => {
     const user_role = req.user.role;
 
     // Only physicians can decline appointments
-    if (user_role !== 'physician' && user_role !== 'admin') {
+    if (user_role !== 'physician' && user_role !== 'case_manager' && user_role !== 'admin') {
       return res.status(403).json({
         success: false,
         message: 'Only physicians can decline appointments'
@@ -2302,6 +2080,328 @@ router.put('/reminders/:id', authenticateToken, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to update reminder',
+      error: error.message
+    });
+  }
+});
+
+
+
+//CASE MANAGER APPROVAL OF APPOINTMENTS
+// POST /api/appointments/:id/approve - Case Manager approves appointment request
+router.post('/:id/approve', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const user_id = req.user.user_id;
+    const user_role = req.user.role;
+
+    // Only case managers and admins can approve
+    if (user_role !== 'case_manager' && user_role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only case managers can approve appointment requests'
+      });
+    }
+
+    // Check if appointment exists
+    const [existing] = await db.query(`
+      SELECT 
+        a.*,
+        CONCAT(p.first_name, ' ', p.last_name) AS patient_name,
+        p.email AS patient_email,
+        u.full_name AS provider_name,
+        f.facility_name
+      FROM appointments a
+      LEFT JOIN patients p ON a.patient_id = p.patient_id
+      LEFT JOIN users u ON a.provider_id = u.user_id
+      LEFT JOIN facilities f ON a.facility_id = f.facility_id
+      WHERE a.appointment_id = ?
+    `, [id]);
+
+    if (existing.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Appointment not found'
+      });
+    }
+
+    const appointment = existing[0];
+
+    // Check if already confirmed
+    if (appointment.status === 'confirmed') {
+      return res.status(400).json({
+        success: false,
+        message: 'Appointment already confirmed'
+      });
+    }
+
+    // Update appointment status to confirmed
+    await db.query(`
+      UPDATE appointments 
+      SET status = 'confirmed'
+      WHERE appointment_id = ?
+    `, [id]);
+
+    // Fetch updated appointment
+    const [updated] = await db.query(`
+      SELECT 
+        a.*,
+        CONCAT(p.first_name, ' ', p.last_name) AS patient_name,
+        u.full_name AS provider_name,
+        f.facility_name
+      FROM appointments a
+      LEFT JOIN patients p ON a.patient_id = p.patient_id
+      LEFT JOIN users u ON a.provider_id = u.user_id
+      LEFT JOIN facilities f ON a.facility_id = f.facility_id
+      WHERE a.appointment_id = ?
+    `, [id]);
+
+    // Notify patient that appointment was approved
+    try {
+      // Get patient's user_id
+      const [patientUsers] = await db.query(`
+        SELECT u.user_id 
+        FROM patients p
+        LEFT JOIN users u ON p.created_by = u.user_id OR p.email = u.email
+        WHERE p.patient_id = ?
+        LIMIT 1
+      `, [appointment.patient_id]);
+
+      if (patientUsers.length > 0) {
+        const patientUserId = patientUsers[0].user_id;
+        
+        // Create notification
+        await db.query(`
+          INSERT INTO notifications (
+            notification_id,
+            user_id,
+            patient_id,
+            type,
+            title,
+            message,
+            is_read,
+            created_at
+          ) VALUES (?, ?, NULL, 'appointment_approved', ?, ?, FALSE, NOW())
+        `, [
+          uuidv4(),
+          patientUserId,
+          'Appointment Approved',
+          `Your appointment for ${new Date(appointment.scheduled_start).toLocaleDateString()} at ${new Date(appointment.scheduled_start).toLocaleTimeString()} has been approved by the case manager.`
+        ]);
+
+        // Emit real-time notification
+        if (io) {
+          io.to(`user_${patientUserId}`).emit('newNotification', {
+            type: 'appointment_approved',
+            title: 'Appointment Approved',
+            message: 'Your appointment has been approved',
+            appointment_id: id,
+            timestamp: new Date().toISOString()
+          });
+        }
+      }
+
+      // Notify provider if assigned
+      if (appointment.provider_id) {
+        await db.query(`
+          INSERT INTO notifications (
+            notification_id,
+            user_id,
+            patient_id,
+            type,
+            title,
+            message,
+            is_read,
+            created_at
+          ) VALUES (?, ?, NULL, 'appointment_assigned', ?, ?, FALSE, NOW())
+        `, [
+          uuidv4(),
+          appointment.provider_id,
+          'New Appointment',
+          `New appointment with ${appointment.patient_name} on ${new Date(appointment.scheduled_start).toLocaleDateString()} at ${new Date(appointment.scheduled_start).toLocaleTimeString()}`
+        ]);
+
+        if (io) {
+          io.to(`user_${appointment.provider_id}`).emit('newNotification', {
+            type: 'appointment_assigned',
+            title: 'New Appointment',
+            message: `New appointment with ${appointment.patient_name}`,
+            appointment_id: id,
+            timestamp: new Date().toISOString()
+          });
+        }
+      }
+    } catch (notifError) {
+      console.error('Error sending approval notifications (non-fatal):', notifError);
+    }
+
+    // Log audit
+    const userInfo = await getUserInfoForAudit(user_id);
+    await logAudit({
+      action: 'UPDATE',
+      table_name: 'appointments',
+      record_id: id,
+      user_id: user_id,
+      user_name: userInfo?.username || 'Unknown',
+      ip_address: getClientIp(req),
+      changes: JSON.stringify({ status: 'confirmed', action: 'approved_by_case_manager' })
+    });
+
+    res.json({
+      success: true,
+      message: 'Appointment approved successfully',
+      data: updated[0]
+    });
+  } catch (error) {
+    console.error('Error approving appointment:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to approve appointment',
+      error: error.message
+    });
+  }
+});
+
+// Add these endpoints to your appointments.js router file (after the accept/decline endpoints)
+
+// POST /api/appointments/:id/decline - Case Manager declines appointment request
+router.post('/:id/decline', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+    const user_id = req.user.user_id;
+    const user_role = req.user.role;
+
+    // Only case managers and admins can decline
+    if (user_role !== 'case_manager' && user_role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only case managers can decline appointment requests'
+      });
+    }
+
+    if (!reason || reason.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        message: 'Decline reason is required'
+      });
+    }
+
+    // Check if appointment exists
+    const [existing] = await db.query(`
+      SELECT 
+        a.*,
+        CONCAT(p.first_name, ' ', p.last_name) AS patient_name,
+        u.full_name AS provider_name,
+        f.facility_name
+      FROM appointments a
+      LEFT JOIN patients p ON a.patient_id = p.patient_id
+      LEFT JOIN users u ON a.provider_id = u.user_id
+      LEFT JOIN facilities f ON a.facility_id = f.facility_id
+      WHERE a.appointment_id = ?
+    `, [id]);
+
+    if (existing.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Appointment not found'
+      });
+    }
+
+    const appointment = existing[0];
+
+    // Update appointment status to cancelled with reason
+    await db.query(`
+      UPDATE appointments 
+      SET status = 'cancelled',
+          cancellation_reason = ?,
+          cancelled_at = NOW(),
+          cancelled_by = ?
+      WHERE appointment_id = ?
+    `, [reason, user_id, id]);
+
+    // Fetch updated appointment
+    const [updated] = await db.query(`
+      SELECT 
+        a.*,
+        CONCAT(p.first_name, ' ', p.last_name) AS patient_name,
+        u.full_name AS provider_name,
+        f.facility_name
+      FROM appointments a
+      LEFT JOIN patients p ON a.patient_id = p.patient_id
+      LEFT JOIN users u ON a.provider_id = u.user_id
+      LEFT JOIN facilities f ON a.facility_id = f.facility_id
+      WHERE a.appointment_id = ?
+    `, [id]);
+
+    // Notify patient that appointment was declined
+    try {
+      const [patientUsers] = await db.query(`
+        SELECT u.user_id 
+        FROM patients p
+        LEFT JOIN users u ON p.created_by = u.user_id OR p.email = u.email
+        WHERE p.patient_id = ?
+        LIMIT 1
+      `, [appointment.patient_id]);
+
+      if (patientUsers.length > 0) {
+        const patientUserId = patientUsers[0].user_id;
+        
+        await db.query(`
+          INSERT INTO notifications (
+            notification_id,
+            user_id,
+            patient_id,
+            type,
+            title,
+            message,
+            is_read,
+            created_at
+          ) VALUES (?, ?, NULL, 'appointment_declined', ?, ?, FALSE, NOW())
+        `, [
+          uuidv4(),
+          patientUserId,
+          'Appointment Declined',
+          `Your appointment request for ${new Date(appointment.scheduled_start).toLocaleDateString()} has been declined. Reason: ${reason}`
+        ]);
+
+        if (io) {
+          io.to(`user_${patientUserId}`).emit('newNotification', {
+            type: 'appointment_declined',
+            title: 'Appointment Declined',
+            message: `Your appointment request has been declined`,
+            decline_reason: reason,
+            appointment_id: id,
+            timestamp: new Date().toISOString()
+          });
+        }
+      }
+    } catch (notifError) {
+      console.error('Error sending decline notifications (non-fatal):', notifError);
+    }
+
+    // Log audit
+    const userInfo = await getUserInfoForAudit(user_id);
+    await logAudit({
+      action: 'UPDATE',
+      table_name: 'appointments',
+      record_id: id,
+      user_id: user_id,
+      user_name: userInfo?.username || 'Unknown',
+      ip_address: getClientIp(req),
+      changes: JSON.stringify({ status: 'cancelled', action: 'declined_by_case_manager', reason })
+    });
+
+    res.json({
+      success: true,
+      message: 'Appointment declined successfully',
+      data: updated[0]
+    });
+  } catch (error) {
+    console.error('Error declining appointment:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to decline appointment',
       error: error.message
     });
   }

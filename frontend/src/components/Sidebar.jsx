@@ -1,5 +1,5 @@
 // web/src/components/Sidebar.jsx
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
   Drawer,
@@ -11,6 +11,8 @@ import {
   Box,
   Typography,
   Divider,
+  Collapse,
+  Chip
 } from '@mui/material';
 import {
   Dashboard as DashboardIcon,
@@ -42,111 +44,168 @@ import {
   LocalShipping as SuppliersIcon,
   ShoppingCart as OrdersIcon,
   Schedule as ScheduleIcon,
+  Vaccines as VaccinesIcon
 } from '@mui/icons-material';
-import { Collapse } from '@mui/material';
-import { PillIcon } from 'lucide-react';
 
-const drawerWidth = 240;
+const drawerWidth = 260;
+const API_BASE_URL = 'http://localhost:5000/api';
 
-// Define menu items with role-based access (removed Medication)
-const allMenuItems = [
-  { text: 'Dashboard', icon: <DashboardIcon />, path: '/dashboard', roles: ['admin', 'physician', 'nurse', 'case_manager', 'lab_personnel', 'patient'] },
-  { text: 'Patients', icon: <PersonIcon />, path: '/patient', roles: ['admin', 'physician', 'nurse', 'case_manager'] },
-  { text: 'Appointments', icon: <CalendarIcon />, path: '/appointments', roles: ['admin', 'physician', 'nurse', 'case_manager'] },
-  { text: 'Availability Slots', icon: <ScheduleIcon />, path: '/availability-slots', roles: ['admin', 'physician', 'case_manager'] },
-  { text: 'My Appointments', icon: <CalendarIcon />, path: '/my-appointments', roles: ['patient'] },
-  { text: 'Profile', icon: <PersonIcon />, path: '/profile', roles: ['patient'] },
-  { text: 'Clinical Visit', icon: <MedicalServicesIcon />, path: '/clinical-visit', roles: ['admin', 'physician', 'nurse', 'case_manager'] },
-  { text: 'Medications', icon: <PillIcon />, path: '/medications', roles: ['admin', 'physician', 'nurse', 'case_manager'] },
-  { text: 'Prescriptions', icon: <DescriptionIcon />, path: '/prescriptions', roles: ['admin', 'physician', 'nurse', 'case_manager'] },
-  { text: 'Medication Reminder', icon: <MedicationIcon />, path: '/medication-adherence', roles: ['admin', 'physician', 'nurse', 'case_manager', 'patient'] },
-  { text: 'ART Regimens', icon: <MedicationIcon />, path: '/art-regimen', roles: ['admin', 'physician', 'nurse', 'case_manager'] },
-  { text: 'Education', icon: <SchoolIcon />, path: '/education', roles: ['admin', 'physician', 'nurse', 'case_manager', 'patient'] },
-  { text: 'Patient Survey', icon: <RateReviewIcon />, path: '/patient-survey', roles: ['patient'] },
-  { text: 'Survey Metrics', icon: <BarChartIcon />, path: '/survey-metrics', roles: ['admin', 'physician', 'case_manager'] },
-  { text: 'Lab Test', icon: <ScienceIcon />, path: '/lab-test', roles: ['admin', 'physician', 'nurse', 'lab_personnel'] },
-  { text: 'HTS Sessions', icon: <AssignmentIcon />, path: '/hts-sessions', roles: ['admin', 'physician', 'nurse', 'case_manager'] },
-  { text: 'Counseling Sessions', icon: <PeopleIcon />, path: '/counseling', roles: ['admin', 'physician', 'nurse', 'case_manager'] },
-  { text: 'Referrals', icon: <HospitalIcon />, path: '/referrals', roles: ['admin', 'physician', 'nurse', 'case_manager'] },
-  { text: 'Care Tasks', icon: <ListAltIcon />, path: '/care-tasks', roles: ['admin', 'case_manager'] },
-  { text: 'Reports', icon: <AssessmentIcon />, path: '/reports', roles: ['admin', 'physician'] },
-  { text: 'Audit Trail', icon: <HistoryIcon />, path: '/audit-trail', roles: ['admin', 'physician', 'nurse', 'case_manager', 'lab_personnel'] },
-  { text: 'Branch', icon: <BusinessIcon />, path: '/branch-management', roles: ['admin'] },
-  { text: 'Settings', icon: <SettingsIcon />, path: '/settings', roles: ['admin', 'physician', 'nurse', 'case_manager', 'lab_personnel', 'patient'] },
-];
+// Define menu items by role based on SIDEBAR_NAVIGATION.md
+const ROLE_MENU_ITEMS = {
+  admin: [
+    { id: 'dashboard', text: 'Dashboard', icon: <DashboardIcon />, path: '/dashboard' },
+    { id: 'patients', text: 'Patients', icon: <PeopleIcon />, path: '/patient' },
+    { id: 'doctor-availability', text: 'Doctor Availability', icon: <ScheduleIcon />, path: '/availability-slots', badge: 'NEW' },
+    { id: 'appointment-requests', text: 'Appointment Requests', icon: <AssignmentIcon />, path: '/appointment-requests', badge: 'NEW' },
+    { id: 'refill-requests', text: 'Refill Requests', icon: <MedicationIcon />, path: '/refill-requests', badge: 'NEW' },
+    { id: 'appointments', text: 'Appointments', icon: <CalendarIcon />, path: '/appointments' },
+    { id: 'clinical-visits', text: 'Clinical Visits', icon: <MedicalServicesIcon />, path: '/clinical-visit' },
+    { 
+      id: 'inventory', 
+      text: 'Inventory', 
+      icon: <InventoryIcon />, 
+      hasSubmenu: true,
+      submenu: [
+        { id: 'inventory-main', text: 'Inventory', icon: <InventoryIcon />, path: '/inventory' },
+        { id: 'inventory-transactions', text: 'Transactions', icon: <TransactionsIcon />, path: '/inventory/transactions' },
+        { id: 'inventory-alerts', text: 'Alerts', icon: <AlertsIcon />, path: '/inventory/alerts' },
+        { id: 'inventory-suppliers', text: 'Suppliers', icon: <SuppliersIcon />, path: '/inventory/suppliers' },
+        { id: 'inventory-orders', text: 'Purchase Orders', icon: <OrdersIcon />, path: '/inventory/orders' }
+      ]
+    },
+    { id: 'prescriptions', text: 'Prescriptions', icon: <DescriptionIcon />, path: '/prescriptions' },
+    { id: 'art-regimen', text: 'ART Regimens', icon: <MedicationIcon />, path: '/art-regimen' },
+    { id: 'lab-tests', text: 'Lab Tests', icon: <ScienceIcon />, path: '/lab-test' },
+    { id: 'hts', text: 'HTS Sessions', icon: <AssignmentIcon />, path: '/hts-sessions' },
+    { id: 'counseling', text: 'Counseling', icon: <ListAltIcon />, path: '/counseling' },
+    { id: 'referrals', text: 'Referrals', icon: <HospitalIcon />, path: '/referrals' },
+    { id: 'care-tasks', text: 'Care Tasks', icon: <CheckIcon />, path: '/care-tasks' },
+    { id: 'surveys', text: 'Satisfaction Surveys', icon: <RateReviewIcon />, path: '/survey-metrics' },
+    { id: 'users', text: 'User Management', icon: <ManageAccountsIcon />, path: '/users' },
+    { id: 'facilities', text: 'My Hub Cares Branches', icon: <BusinessIcon />, path: '/branch-management' },
+    { id: 'audit', text: 'Audit Trail', icon: <HistoryIcon />, path: '/audit-trail' },
+    { id: 'reports', text: 'Reports', icon: <BarChartIcon />, path: '/reports' },
+    { id: 'education', text: 'Education', icon: <SchoolIcon />, path: '/education' }
+  ],
+  physician: [
+    { id: 'dashboard', text: 'Dashboard', icon: <DashboardIcon />, path: '/dashboard' },
+    { id: 'patients', text: 'Patients', icon: <PeopleIcon />, path: '/patient' },
+    { id: 'appointments', text: 'Appointments', icon: <CalendarIcon />, path: '/appointments' },
+    { id: 'clinical-visits', text: 'Clinical Visits', icon: <MedicalServicesIcon />, path: '/clinical-visit' },
+    { id: 'prescriptions', text: 'Prescriptions', icon: <DescriptionIcon />, path: '/prescriptions' },
+    { id: 'art-regimen', text: 'ART Regimens', icon: <MedicationIcon />, path: '/art-regimen' },
+    { id: 'lab-results', text: 'Lab Results', icon: <ScienceIcon />, path: '/lab-test' },
+    { id: 'counseling', text: 'Counseling', icon: <ListAltIcon />, path: '/counseling' },
+    { id: 'care-tasks', text: 'Care Tasks', icon: <CheckIcon />, path: '/care-tasks' },
+    { id: 'inventory', text: 'Inventory', icon: <InventoryIcon />, path: '/inventory' },
+    { id: 'audit', text: 'My Activity Log', icon: <HistoryIcon />, path: '/audit-trail' },
+    { id: 'education', text: 'Education', icon: <SchoolIcon />, path: '/education' }
+  ],
+  nurse: [
+    { id: 'dashboard', text: 'Dashboard', icon: <DashboardIcon />, path: '/dashboard' },
+    { id: 'patients', text: 'Patients', icon: <PeopleIcon />, path: '/patient' },
+    { id: 'appointments', text: 'Appointments', icon: <CalendarIcon />, path: '/appointments' },
+    { id: 'clinical-visits', text: 'Clinical Visits', icon: <MedicalServicesIcon />, path: '/clinical-visit' },
+    { id: 'inventory', text: 'Inventory', icon: <InventoryIcon />, path: '/inventory' },
+    { id: 'prescriptions', text: 'Prescriptions', icon: <DescriptionIcon />, path: '/prescriptions' },
+    { id: 'hts', text: 'HTS Sessions', icon: <AssignmentIcon />, path: '/hts-sessions' },
+    { id: 'care-tasks', text: 'Care Tasks', icon: <CheckIcon />, path: '/care-tasks' },
+    { id: 'audit', text: 'My Activity Log', icon: <HistoryIcon />, path: '/audit-trail' },
+    { id: 'education', text: 'Education', icon: <SchoolIcon />, path: '/education' }
+  ],
+  case_manager: [
+    { id: 'dashboard', text: 'Dashboard', icon: <DashboardIcon />, path: '/dashboard' },
+    { id: 'patients', text: 'Patients', icon: <PeopleIcon />, path: '/patient' },
+    { id: 'appointment-requests', text: 'Appointment Requests', icon: <AssignmentIcon />, path: '/appointment-requests', badge: 'NEW' },
+    { id: 'refill-requests', text: 'Refill Requests', icon: <MedicationIcon />, path: '/refill-requests', badge: 'NEW' },
+    { id: 'appointments', text: 'Appointments', icon: <CalendarIcon />, path: '/appointments' },
+    { id: 'counseling', text: 'Counseling', icon: <ListAltIcon />, path: '/counseling' },
+    { id: 'referrals', text: 'Referrals', icon: <HospitalIcon />, path: '/referrals' },
+    { id: 'care-tasks', text: 'Care Tasks', icon: <CheckIcon />, path: '/care-tasks' },
+    { id: 'hts', text: 'HTS Sessions', icon: <AssignmentIcon />, path: '/hts-sessions' },
+    { id: 'audit', text: 'My Activity Log', icon: <HistoryIcon />, path: '/audit-trail' },
+    { id: 'education', text: 'Education', icon: <SchoolIcon />, path: '/education' }
+  ],
+  lab_personnel: [
+    { id: 'dashboard', text: 'Dashboard', icon: <DashboardIcon />, path: '/dashboard' },
+    { id: 'lab-tests', text: 'Lab Tests', icon: <ScienceIcon />, path: '/lab-test' },
+    { id: 'hts', text: 'HTS Sessions', icon: <AssignmentIcon />, path: '/hts-sessions' },
+    { id: 'patients', text: 'Patients', icon: <PeopleIcon />, path: '/patient' },
+    { id: 'audit', text: 'My Activity Log', icon: <HistoryIcon />, path: '/audit-trail' },
+    { id: 'education', text: 'Education', icon: <SchoolIcon />, path: '/education' }
+  ],
+  patient: [
+    { id: 'dashboard', text: 'My Dashboard', icon: <DashboardIcon />, path: '/dashboard' },
+    { id: 'profile', text: 'My Profile', icon: <PersonIcon />, path: '/profile' },
+    { id: 'appointments', text: 'Appointments', icon: <CalendarIcon />, path: '/my-appointments' },
+    { id: 'medications', text: 'My Medications', icon: <MedicationIcon />, path: '/medications', badge: 'NEW' },
+    { id: 'prescriptions', text: 'Prescriptions', icon: <DescriptionIcon />, path: '/prescriptions' },
+    { id: 'lab-results', text: 'Lab Results', icon: <ScienceIcon />, path: '/lab-test' },
+    { id: 'feedback', text: 'Feedback', icon: <RateReviewIcon />, path: '/patient-survey' },
+    { id: 'audit', text: 'My Activity Log', icon: <HistoryIcon />, path: '/audit-trail' },
+    { id: 'education', text: 'Health Education', icon: <SchoolIcon />, path: '/education' }
+  ]
+};
 
 const Sidebar = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const [userRole, setUserRole] = React.useState(null);
-  const [inventoryOpen, setInventoryOpen] = React.useState(false);
+  const [userRole, setUserRole] = useState(null);
+  const [openSubmenu, setOpenSubmenu] = useState(null);
 
-  React.useEffect(() => {
-    // Get user role from localStorage or API
-    const getUserRole = async () => {
-      try {
-        const userStr = localStorage.getItem('user');
-        if (userStr) {
-          const user = JSON.parse(userStr);
-          setUserRole(user.role);
-        } else {
-          // Try to fetch from API
-          const token = localStorage.getItem('token');
-          if (token) {
-            const response = await fetch('http://localhost:5000/api/auth/me', {
-              headers: {
-                Authorization: `Bearer ${token}`,
-              },
-            });
-            if (response.ok) {
-              const data = await response.json();
-              if (data.success) {
-                setUserRole(data.user.role);
-              }
+  useEffect(() => {
+    fetchUserRole();
+  }, []);
+
+  // Auto-open submenu if on submenu route
+  useEffect(() => {
+    const menuItems = ROLE_MENU_ITEMS[userRole] || [];
+    menuItems.forEach(item => {
+      if (item.hasSubmenu && item.submenu) {
+        const isSubmenuActive = item.submenu.some(sub => location.pathname === sub.path);
+        if (isSubmenuActive) {
+          setOpenSubmenu(item.id);
+        }
+      }
+    });
+  }, [location.pathname, userRole]);
+
+  const fetchUserRole = async () => {
+    try {
+      const userStr = localStorage.getItem('user');
+      if (userStr) {
+        const user = JSON.parse(userStr);
+        setUserRole(user.role);
+      } else {
+        const token = localStorage.getItem('token');
+        if (token) {
+          const response = await fetch(`${API_BASE_URL}/auth/me`, {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          if (response.ok) {
+            const data = await response.json();
+            if (data.success) {
+              setUserRole(data.user.role);
             }
           }
         }
-      } catch (error) {
-        console.error('Error getting user role:', error);
       }
-    };
-    getUserRole();
-  }, []);
-
-  // Filter menu items based on user role (exclude patient for inventory dropdown)
-  const menuItems = userRole
-    ? allMenuItems.filter((item) => item.roles.includes(userRole))
-    : [];
-
-  // Check if inventory dropdown should be shown (all roles except patient)
-  const showInventoryDropdown = userRole && userRole !== 'patient';
-
-  // Inventory submenu items
-  const inventorySubItems = [
-    { text: 'Inventory', icon: <InventoryIcon />, path: '/inventory' },
-    { text: 'Transactions', icon: <TransactionsIcon />, path: '/inventory/transactions' },
-    { text: 'Alerts', icon: <AlertsIcon />, path: '/inventory/alerts' },
-    { text: 'Suppliers', icon: <SuppliersIcon />, path: '/inventory/suppliers' },
-    { text: 'Purchase Orders', icon: <OrdersIcon />, path: '/inventory/orders' },
-  ];
-
-  // Check if any inventory submenu item is active
-  const isInventoryActive = inventorySubItems.some(item => location.pathname === item.path);
-
-  // Auto-open inventory dropdown if on inventory page
-  React.useEffect(() => {
-    if (isInventoryActive) {
-      setInventoryOpen(true);
+    } catch (error) {
+      console.error('Error fetching user role:', error);
     }
-  }, [isInventoryActive]);
+  };
 
   const handleLogout = () => {
-    // Clear any authentication tokens and user data
     localStorage.removeItem('token');
     localStorage.removeItem('user');
-    // Redirect to home page
     navigate('/');
   };
+
+  const toggleSubmenu = (menuId) => {
+    setOpenSubmenu(openSubmenu === menuId ? null : menuId);
+  };
+
+  const menuItems = ROLE_MENU_ITEMS[userRole] || [];
 
   return (
     <Drawer
@@ -166,15 +225,23 @@ const Sidebar = () => {
       }}
     >
       <Toolbar>
-        <Typography
-          variant="h6"
-          noWrap
-          component="div"
-          sx={{ color: '#B82132', fontWeight: 600 }}
-        >
-          My Hub Cares
-        </Typography>
+        <Box>
+          <Typography
+            variant="h6"
+            noWrap
+            component="div"
+            sx={{ color: '#B82132', fontWeight: 600 }}
+          >
+            My Hub Cares
+          </Typography>
+          {userRole && (
+            <Typography variant="caption" sx={{ color: '#6c757d', textTransform: 'capitalize' }}>
+              {userRole.replace('_', ' ')}
+            </Typography>
+          )}
+        </Box>
       </Toolbar>
+      
       <Box sx={{ overflow: 'auto', flexGrow: 1 }}>
         <List>
           {menuItems.length === 0 ? (
@@ -182,211 +249,151 @@ const Sidebar = () => {
               <ListItemText primary="Loading..." />
             </ListItem>
           ) : (
-            <>
-              {menuItems.map((item) => {
-                // Skip the inventory item if we're showing the dropdown
-                if (showInventoryDropdown && item.text === 'Inventory') {
-                  return null;
-                }
-                
+            menuItems.map((item) => {
+              const isActive = location.pathname === item.path;
+              const hasSubmenu = item.hasSubmenu && item.submenu;
+              const isSubmenuOpen = openSubmenu === item.id;
+              const isAnySubmenuActive = hasSubmenu && item.submenu.some(sub => location.pathname === sub.path);
+
+              if (hasSubmenu) {
                 return (
-                  <ListItem
-                    button
-                    key={item.text}
-                    onClick={() => navigate(item.path)}
-                    selected={location.pathname === item.path}
-                    sx={{
-                      borderRadius: 1,
-                      mx: 1,
-                      my: 0.5,
-                      borderLeft:
-                        location.pathname === item.path
-                          ? '4px solid #B82132'
-                          : '4px solid transparent',
-                      transition: 'all 0.2s ease-in-out',
-                      '&.Mui-selected': {
-                        backgroundColor: 'rgba(184, 33, 50, 0.1)',
+                  <React.Fragment key={item.id}>
+                    <ListItem
+                      onClick={() => toggleSubmenu(item.id)}
+                      sx={{
+                        cursor: 'pointer',
+                        borderRadius: 1,
+                        mx: 1,
+                        my: 0.5,
+                        borderLeft: isAnySubmenuActive ? '4px solid #B82132' : '4px solid transparent',
+                        transition: 'all 0.2s ease-in-out',
+                        backgroundColor: isAnySubmenuActive ? 'rgba(184, 33, 50, 0.1)' : 'transparent',
                         '&:hover': {
-                          backgroundColor: 'rgba(184, 33, 50, 0.15)',
+                          backgroundColor: 'rgba(184, 33, 50, 0.05)',
+                          borderLeft: '4px solid #B82132',
                         },
-                        '& .MuiListItemIcon-root': {
-                          color: '#B82132',
-                        },
-                        '& .MuiListItemText-primary': {
-                          color: '#B82132',
-                          fontWeight: 500,
-                        },
-                      },
-                      '&:hover': {
-                        backgroundColor: 'rgba(184, 33, 50, 0.05)',
-                        borderLeft: '4px solid #B82132',
-                        '& .MuiListItemIcon-root': {
-                          color: '#B82132',
-                        },
-                        '& .MuiListItemText-primary': {
-                          color: '#B82132',
-                        },
-                      },
-                    }}
-                  >
-                    <ListItemIcon
-                      sx={{
-                        color:
-                          location.pathname === item.path ? '#B82132' : '#64748b',
-                        minWidth: 40,
-                        transition: 'color 0.2s ease-in-out',
                       }}
                     >
-                      {item.icon}
-                    </ListItemIcon>
-                    <ListItemText
-                      primary={item.text}
-                      sx={{
-                        '& .MuiListItemText-primary': {
-                          color:
-                            location.pathname === item.path ? '#B82132' : '#333333',
-                          fontWeight: location.pathname === item.path ? 500 : 400,
-                          transition: 'color 0.2s ease-in-out',
-                          fontSize: '0.875rem',
-                        },
-                      }}
-                    />
-                  </ListItem>
+                      <ListItemIcon sx={{ color: isAnySubmenuActive ? '#B82132' : '#64748b', minWidth: 40 }}>
+                        {item.icon}
+                      </ListItemIcon>
+                      <ListItemText 
+                        primary={item.text}
+                        sx={{ '& .MuiListItemText-primary': { fontSize: '0.875rem', fontWeight: isAnySubmenuActive ? 500 : 400 } }}
+                      />
+                      {isSubmenuOpen ? <ExpandLess /> : <ExpandMore />}
+                    </ListItem>
+                    <Collapse in={isSubmenuOpen} timeout="auto" unmountOnExit>
+                      <List component="div" disablePadding>
+                        {item.submenu.map((subItem) => {
+                          const isSubActive = location.pathname === subItem.path;
+                          return (
+                            <ListItem
+                              key={subItem.id}
+                              onClick={() => navigate(subItem.path)}
+                              sx={{
+                                pl: 4,
+                                cursor: 'pointer',
+                                borderRadius: 1,
+                                mx: 1,
+                                my: 0.25,
+                                borderLeft: isSubActive ? '4px solid #B82132' : '4px solid transparent',
+                                backgroundColor: isSubActive ? 'rgba(184, 33, 50, 0.1)' : 'transparent',
+                                '&:hover': {
+                                  backgroundColor: 'rgba(184, 33, 50, 0.05)',
+                                  borderLeft: '4px solid #B82132',
+                                },
+                              }}
+                            >
+                              <ListItemIcon sx={{ color: isSubActive ? '#B82132' : '#64748b', minWidth: 40 }}>
+                                {subItem.icon}
+                              </ListItemIcon>
+                              <ListItemText 
+                                primary={subItem.text}
+                                sx={{ '& .MuiListItemText-primary': { fontSize: '0.875rem' } }}
+                              />
+                            </ListItem>
+                          );
+                        })}
+                      </List>
+                    </Collapse>
+                  </React.Fragment>
                 );
-              })}
-              
-              {/* Inventory Dropdown Menu */}
-              {showInventoryDropdown && (
-                <>
-                  <ListItem
-                    button
-                    onClick={() => setInventoryOpen(!inventoryOpen)}
-                    sx={{
-                      borderRadius: 1,
-                      mx: 1,
-                      my: 0.5,
-                      borderLeft: isInventoryActive
-                        ? '4px solid #B82132'
-                        : '4px solid transparent',
-                      backgroundColor: isInventoryActive
-                        ? 'rgba(184, 33, 50, 0.1)'
-                        : 'transparent',
-                      transition: 'all 0.2s ease-in-out',
+              }
+
+              return (
+                <ListItem
+                  key={item.id}
+                  onClick={() => navigate(item.path)}
+                  selected={isActive}
+                  sx={{
+                    cursor: 'pointer',
+                    borderRadius: 1,
+                    mx: 1,
+                    my: 0.5,
+                    borderLeft: isActive ? '4px solid #B82132' : '4px solid transparent',
+                    transition: 'all 0.2s ease-in-out',
+                    '&.Mui-selected': {
+                      backgroundColor: 'rgba(184, 33, 50, 0.1)',
                       '&:hover': {
-                        backgroundColor: 'rgba(184, 33, 50, 0.05)',
-                        borderLeft: '4px solid #B82132',
-                        '& .MuiListItemIcon-root': {
-                          color: '#B82132',
-                        },
-                        '& .MuiListItemText-primary': {
-                          color: '#B82132',
-                        },
+                        backgroundColor: 'rgba(184, 33, 50, 0.15)',
                       },
-                    }}
-                  >
-                    <ListItemIcon
-                      sx={{
-                        color: isInventoryActive ? '#B82132' : '#64748b',
-                        minWidth: 40,
-                        transition: 'color 0.2s ease-in-out',
-                      }}
-                    >
-                      <InventoryIcon />
-                    </ListItemIcon>
-                    <ListItemText
-                      primary="Inventory Management"
-                      sx={{
-                        '& .MuiListItemText-primary': {
-                          color: isInventoryActive ? '#B82132' : '#333333',
-                          fontWeight: isInventoryActive ? 500 : 400,
-                          transition: 'color 0.2s ease-in-out',
-                          fontSize: '0.875rem',
-                        },
-                      }}
+                    },
+                    '&:hover': {
+                      backgroundColor: 'rgba(184, 33, 50, 0.05)',
+                      borderLeft: '4px solid #B82132',
+                    },
+                  }}
+                >
+                  <ListItemIcon sx={{ color: isActive ? '#B82132' : '#64748b', minWidth: 40 }}>
+                    {item.icon}
+                  </ListItemIcon>
+                  <ListItemText 
+                    primary={item.text}
+                    sx={{ '& .MuiListItemText-primary': { fontSize: '0.875rem', fontWeight: isActive ? 500 : 400 } }}
+                  />
+                  {item.badge && (
+                    <Chip 
+                      label={item.badge} 
+                      size="small" 
+                      sx={{ 
+                        height: '18px', 
+                        fontSize: '10px',
+                        backgroundColor: '#28a745',
+                        color: 'white',
+                        fontWeight: 'bold'
+                      }} 
                     />
-                    {inventoryOpen ? (
-                      <ExpandLess sx={{ color: isInventoryActive ? '#B82132' : '#64748b' }} />
-                    ) : (
-                      <ExpandMore sx={{ color: isInventoryActive ? '#B82132' : '#64748b' }} />
-                    )}
-                  </ListItem>
-                  <Collapse in={inventoryOpen} timeout="auto" unmountOnExit>
-                    <List component="div" disablePadding>
-                      {inventorySubItems.map((subItem) => (
-                        <ListItem
-                          button
-                          key={subItem.text}
-                          onClick={() => navigate(subItem.path)}
-                          selected={location.pathname === subItem.path}
-                          sx={{
-                            pl: 4,
-                            borderRadius: 1,
-                            mx: 1,
-                            my: 0.25,
-                            borderLeft:
-                              location.pathname === subItem.path
-                                ? '4px solid #B82132'
-                                : '4px solid transparent',
-                            transition: 'all 0.2s ease-in-out',
-                            '&.Mui-selected': {
-                              backgroundColor: 'rgba(184, 33, 50, 0.1)',
-                              '&:hover': {
-                                backgroundColor: 'rgba(184, 33, 50, 0.15)',
-                              },
-                              '& .MuiListItemIcon-root': {
-                                color: '#B82132',
-                              },
-                              '& .MuiListItemText-primary': {
-                                color: '#B82132',
-                                fontWeight: 500,
-                              },
-                            },
-                            '&:hover': {
-                              backgroundColor: 'rgba(184, 33, 50, 0.05)',
-                              borderLeft: '4px solid #B82132',
-                              '& .MuiListItemIcon-root': {
-                                color: '#B82132',
-                              },
-                              '& .MuiListItemText-primary': {
-                                color: '#B82132',
-                              },
-                            },
-                          }}
-                        >
-                          <ListItemIcon
-                            sx={{
-                              color:
-                                location.pathname === subItem.path ? '#B82132' : '#64748b',
-                              minWidth: 40,
-                              transition: 'color 0.2s ease-in-out',
-                            }}
-                          >
-                            {subItem.icon}
-                          </ListItemIcon>
-                          <ListItemText
-                            primary={subItem.text}
-                            sx={{
-                              '& .MuiListItemText-primary': {
-                                color:
-                                  location.pathname === subItem.path ? '#B82132' : '#333333',
-                                fontWeight: location.pathname === subItem.path ? 500 : 400,
-                                transition: 'color 0.2s ease-in-out',
-                                fontSize: '0.875rem',
-                              },
-                            }}
-                          />
-                        </ListItem>
-                      ))}
-                    </List>
-                  </Collapse>
-                </>
-              )}
-            </>
+                  )}
+                </ListItem>
+              );
+            })
           )}
         </List>
       </Box>
+
       <Box sx={{ p: 1, mb: 1 }}>
         <Divider sx={{ mb: 1 }} />
+        {/* Settings - Only visible for admin */}
+        {userRole === 'admin' && (
+          <ListItem
+            button
+            onClick={() => navigate('/settings')}
+            selected={location.pathname === '/settings'}
+            sx={{
+              cursor: 'pointer',
+              borderRadius: 1,
+              mx: 1,
+              mb: 1,
+              '&:hover': { backgroundColor: 'rgba(184, 33, 50, 0.05)' }
+            }}
+          >
+            <ListItemIcon sx={{ color: '#64748b', minWidth: 40 }}>
+              <SettingsIcon />
+            </ListItemIcon>
+            <ListItemText primary="Settings" sx={{ '& .MuiListItemText-primary': { fontSize: '0.875rem' } }} />
+          </ListItem>
+        )}
         <ListItem
           button
           onClick={handleLogout}
@@ -403,7 +410,7 @@ const Sidebar = () => {
           <ListItemIcon sx={{ color: 'white', minWidth: 40 }}>
             <LogoutIcon />
           </ListItemIcon>
-          <ListItemText primary="Logout" sx={{ color: 'white' }} />
+          <ListItemText primary="Logout" sx={{ color: 'white', '& .MuiListItemText-primary': { fontSize: '0.875rem' } }} />
         </ListItem>
       </Box>
     </Drawer>

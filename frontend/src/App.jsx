@@ -33,11 +33,14 @@ import Profile from './components/Profile.jsx';
 import Settings from './components/Settings.jsx';
 import MedicationAdherence from './components/MedicationAdherence.jsx';
 import Medications from './components/Medications.jsx';
+import RefillRequests from './components/RefillRequests.jsx';
 import MyAppointments from './components/MyAppointments.jsx';
+import AppointmentRequests from './components/AppointmentRequests.jsx';
 import CareTasks from './components/CareTasks.jsx';
 import Reports from './components/Reports.jsx';
 import AuditTrail from './components/AuditTrail.jsx';
 import Education from './components/Education.jsx';
+import Forum from './components/Forum.jsx';
 import PatientSurvey from './components/PatientSurvey.jsx';
 import SurveyMetrics from './components/SurveyMetrics.jsx';
 import AvailabilitySlots from './components/AvailabilitySlots.jsx';
@@ -213,6 +216,14 @@ export default function App() {
             }
           />
           <Route
+            path="/refill-requests"
+            element={
+              <MainLayout socket={socket}>
+                <RefillRequests socket={socket} />
+              </MainLayout>
+            }
+          />
+          <Route
             path="/art-regimen"
             element={
               <MainLayout socket={socket}>
@@ -298,6 +309,16 @@ export default function App() {
             }
           />
           <Route
+            path="/appointment-requests"
+            element={
+              <MainLayout socket={socket}>
+                <ProtectedRoute allowedRoles={['case_manager', 'admin']}>
+                  <AppointmentRequests socket={socket} />
+                </ProtectedRoute>
+              </MainLayout>
+            }
+          />
+          <Route
             path="/care-tasks"
             element={
               <MainLayout socket={socket}>
@@ -326,6 +347,14 @@ export default function App() {
             element={
               <MainLayout socket={socket}>
                 <Education socket={socket} />
+              </MainLayout>
+            }
+          />
+          <Route
+            path="/forum"
+            element={
+              <MainLayout socket={socket}>
+                <Forum socket={socket} />
               </MainLayout>
             }
           />

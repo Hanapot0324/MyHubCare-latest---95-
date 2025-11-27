@@ -6,12 +6,10 @@ import {
   Lock,
   Info,
   HelpCircle,
-  // Cog, // Hidden for now
   UserCheck,
 } from 'lucide-react';
 import UserManagement from './UserManagement';
 import RolePermissionManagement from './RolePermissionManagement';
-// import SystemSettings from './SystemSettings'; // Hidden for now
 import ClientTypes from './ClientTypes';
 import ChangePassword from './ChangePassword';
 import About from './About1';
@@ -20,8 +18,9 @@ import FAQs from './FAQs';
 const API_BASE_URL = 'http://localhost:5000/api';
 
 const Settings = () => {
-  const [activeTab, setActiveTab] = useState('password'); // 'users', 'roles', 'password', 'about', or 'faqs'
+  const [activeTab, setActiveTab] = useState('password');
   const [userRole, setUserRole] = useState(null);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
     const getUserRole = async () => {
@@ -30,6 +29,11 @@ const Settings = () => {
         if (userStr) {
           const user = JSON.parse(userStr);
           setUserRole(user.role);
+          
+          // Set admin status with case-insensitive comparison
+          const role = user.role ? user.role.toLowerCase() : '';
+          setIsAdmin(role === 'admin' || role === 'superadmin');
+          
           // Set default tab based on role
           if (user.role === 'patient') {
             setActiveTab('password');
@@ -49,6 +53,11 @@ const Settings = () => {
               const data = await response.json();
               if (data.success) {
                 setUserRole(data.user.role);
+                
+                // Set admin status with case-insensitive comparison
+                const role = data.user.role ? data.user.role.toLowerCase() : '';
+                setIsAdmin(role === 'admin' || role === 'superadmin');
+                
                 // Set default tab based on role
                 if (data.user.role === 'patient') {
                   setActiveTab('password');
@@ -169,31 +178,7 @@ const Settings = () => {
               <Shield size={18} />
               Roles & Permissions
             </button>
-            {/* System Settings tab - Hidden for now */}
             {/* <button
-              onClick={() => setActiveTab('system-settings')}
-              style={{
-                padding: '16px 24px',
-                border: 'none',
-                background: 'transparent',
-                borderBottom:
-                  activeTab === 'system-settings'
-                    ? '3px solid #D84040'
-                    : '3px solid transparent',
-                color: activeTab === 'system-settings' ? '#D84040' : '#6c757d',
-                fontWeight: activeTab === 'system-settings' ? 600 : 400,
-                cursor: 'pointer',
-                fontSize: '16px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                transition: 'all 0.2s',
-              }}
-            >
-              <Cog size={18} />
-              System Settings
-            </button> */}
-            <button
               onClick={() => setActiveTab('client-types')}
               style={{
                 padding: '16px 24px',
@@ -215,6 +200,29 @@ const Settings = () => {
             >
               <UserCheck size={18} />
               Client Types
+            </button> */}
+            <button
+              onClick={() => setActiveTab('faqs')}
+              style={{
+                padding: '16px 24px',
+                border: 'none',
+                background: 'transparent',
+                borderBottom:
+                  activeTab === 'faqs'
+                    ? '3px solid #D84040'
+                    : '3px solid transparent',
+                color: activeTab === 'faqs' ? '#D84040' : '#6c757d',
+                fontWeight: activeTab === 'faqs' ? 600 : 400,
+                cursor: 'pointer',
+                fontSize: '16px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                transition: 'all 0.2s',
+              }}
+            >
+              <HelpCircle size={18} />
+              FAQs
             </button>
           </>
         )}
@@ -264,29 +272,6 @@ const Settings = () => {
           <Info size={18} />
           About
         </button>
-        <button
-          onClick={() => setActiveTab('faqs')}
-          style={{
-            padding: '16px 24px',
-            border: 'none',
-            background: 'transparent',
-            borderBottom:
-              activeTab === 'faqs'
-                ? '3px solid #D84040'
-                : '3px solid transparent',
-            color: activeTab === 'faqs' ? '#D84040' : '#6c757d',
-            fontWeight: activeTab === 'faqs' ? 600 : 400,
-            cursor: 'pointer',
-            fontSize: '16px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            transition: 'all 0.2s',
-          }}
-        >
-          <HelpCircle size={18} />
-          FAQs
-        </button>
       </div>
 
       {/* Tab Content */}
@@ -303,16 +288,14 @@ const Settings = () => {
           <UserManagement />
         ) : activeTab === 'roles' && !isPatient ? (
           <RolePermissionManagement />
-        ) : /* activeTab === 'system-settings' && !isPatient ? (
-          <SystemSettings />
-        ) : */ activeTab === 'client-types' && !isPatient ? (
+        ) : activeTab === 'client-types' && !isPatient ? (
           <ClientTypes />
+        ) : activeTab === 'faqs' && !isPatient ? (
+          <FAQs isAdmin={isAdmin} />
         ) : activeTab === 'password' ? (
           <ChangePassword />
         ) : activeTab === 'about' ? (
           <About />
-        ) : activeTab === 'faqs' ? (
-          <FAQs />
         ) : (
           <ChangePassword />
         )}
