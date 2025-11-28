@@ -1002,6 +1002,71 @@ export async function notifyAppointmentSlotConfirmed(appointment) {
       // Socket notification will be emitted by the calling route if needed
     }
 
+    // Notify physician if provider_id exists
+    if (provider_id) {
+      try {
+        // Get provider role to check if it's a physician or nurse
+        const [providerInfo] = await db.query(`
+          SELECT role FROM users WHERE user_id = ?
+        `, [provider_id]);
+        
+        const providerRole = providerInfo.length > 0 ? providerInfo[0].role : null;
+        
+        // Only notify if provider is physician or nurse
+        if (providerRole === 'physician' || providerRole === 'nurse') {
+          const physicianSubject = `Appointment Scheduled`;
+          const physicianBody = `A ${appointment_type.replace('_', ' ')} appointment has been scheduled for ${patientName} at ${facilityName} on ${formattedDate}.`;
+          
+          const physicianPayload = {
+            type: 'appointment_scheduled',
+            appointment_id,
+            patient_id,
+            provider_id,
+            provider_name: providerName,
+            facility_id,
+            scheduled_start,
+            appointment_type,
+            requires_confirmation: false
+          };
+          
+          // In-app message for physician
+          const physicianMessage = await createInAppMessage({
+            sender_id: null, // System message
+            recipient_id: provider_id,
+            recipient_type: 'user',
+            subject: physicianSubject,
+            body: physicianBody,
+            payload: physicianPayload,
+            priority: 'high'
+          });
+          
+          if (physicianMessage.success) {
+            console.log('✅ Physician notification created for appointment slot confirmation:', provider_id);
+            notifications.push(physicianMessage);
+          } else {
+            console.error('❌ Failed to create physician notification:', physicianMessage.error);
+          }
+          
+          // Also create notification entry for physician
+          const physicianNotification = await createNotification({
+            recipient_id: provider_id,
+            patient_id: patient_id, // Include patient_id so staff can see this
+            title: 'Appointment Scheduled',
+            message: `${patientName} has an appointment scheduled on ${formattedDate}`,
+            type: 'appointment',
+            payload: JSON.stringify(physicianPayload)
+          });
+          
+          if (physicianNotification.success) {
+            notifications.push(physicianNotification);
+          }
+        }
+      } catch (physicianNotifError) {
+        console.error('Error notifying physician (non-fatal):', physicianNotifError);
+        // Don't fail the entire function if physician notification fails
+      }
+    }
+
     return { success: true, notifications };
   } catch (error) {
     console.error('Error notifying appointment slot confirmation:', error);

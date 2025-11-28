@@ -11,6 +11,7 @@ import {
   Activity,
   AlertCircle,
   Upload,
+  Calendar,
 } from 'lucide-react';
 
 const API_URL = 'http://localhost:5000/api';
@@ -24,6 +25,10 @@ const Profile = () => {
   const [identifiers, setIdentifiers] = useState([]);
   const [riskScores, setRiskScores] = useState([]);
   const [documents, setDocuments] = useState([]);
+  const [labResults, setLabResults] = useState([]);
+  const [medications, setMedications] = useState([]);
+  const [medicationAdherence, setMedicationAdherence] = useState(null);
+  const [clinicalVisits, setClinicalVisits] = useState([]);
   const [showIdentifierModal, setShowIdentifierModal] = useState(false);
   const [showDocumentModal, setShowDocumentModal] = useState(false);
   const [editingIdentifier, setEditingIdentifier] = useState(null);
@@ -184,6 +189,103 @@ const Profile = () => {
         setRiskScores([]);
       }
 
+      // Fetch lab results
+      try {
+        const labResultsResponse = await fetch(
+          `${API_URL}/lab-results/patient/${patientId}`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }
+        );
+        const labResultsData = await labResultsResponse.json();
+        if (labResultsData.success) {
+          setLabResults(labResultsData.data || []);
+        }
+      } catch (err) {
+        console.error('Error fetching lab results:', err);
+        setLabResults([]);
+      }
+
+      // Fetch medications/prescriptions
+      try {
+        const prescriptionsResponse = await fetch(
+          `${API_URL}/prescriptions?patient_id=${patientId}&status=active`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }
+        );
+        const prescriptionsData = await prescriptionsResponse.json();
+        if (prescriptionsData.success) {
+          // Extract medications from prescriptions
+          const meds = [];
+          (prescriptionsData.data || prescriptionsData.prescriptions || []).forEach(prescription => {
+            if (prescription.items && prescription.items.length > 0) {
+              prescription.items.forEach(item => {
+                meds.push({
+                  medication_name: item.medication_name,
+                  dosage: item.dosage,
+                  frequency: item.frequency,
+                  prescription_id: prescription.prescription_id,
+                  prescription_item_id: item.prescription_item_id,
+                  start_date: prescription.start_date,
+                  end_date: prescription.end_date,
+                  status: prescription.status,
+                });
+              });
+            }
+          });
+          setMedications(meds);
+        }
+      } catch (err) {
+        console.error('Error fetching medications:', err);
+        setMedications([]);
+      }
+
+      // Fetch medication adherence summary
+      try {
+        const adherenceResponse = await fetch(
+          `${API_URL}/medication-adherence?patient_id=${patientId}`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }
+        );
+        if (adherenceResponse.ok) {
+          const adherenceData = await adherenceResponse.json();
+          if (adherenceData.success) {
+            // Use summary if available, otherwise calculate from data
+            if (adherenceData.summary) {
+              setMedicationAdherence({
+                avg_adherence: adherenceData.summary.overall_adherence_percentage || adherenceData.summary.average_adherence,
+                total_records: adherenceData.summary.total_records,
+                missed_doses: adherenceData.summary.missed_records || adherenceData.summary.missed_doses || 0,
+                last_record_date: adherenceData.data && adherenceData.data.length > 0 ? adherenceData.data[0].adherence_date : null,
+              });
+            } else if (adherenceData.data && adherenceData.data.length > 0) {
+              // Calculate from data
+              const records = adherenceData.data || [];
+              const totalAdherence = records.reduce((sum, r) => sum + (r.adherence_percentage || 0), 0);
+              const avgAdherence = records.length > 0 ? totalAdherence / records.length : 0;
+              const missedDoses = records.filter(r => r.taken === 0 || r.taken === false || !r.taken).length;
+              
+              setMedicationAdherence({
+                avg_adherence: avgAdherence,
+                total_records: records.length,
+                missed_doses: missedDoses,
+                last_record_date: records[0]?.adherence_date || null,
+              });
+            }
+          }
+        }
+      } catch (err) {
+        console.error('Error fetching medication adherence:', err);
+      }
+
       // Fetch documents
       try {
         const documentsResponse = await fetch(
@@ -201,6 +303,25 @@ const Profile = () => {
       } catch (err) {
         console.error('Error fetching documents:', err);
         setDocuments([]);
+      }
+
+      // Fetch clinical visits history
+      try {
+        const visitsResponse = await fetch(
+          `${API_URL}/clinical-visits/patient/${patientId}`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }
+        );
+        const visitsData = await visitsResponse.json();
+        if (visitsData.success) {
+          setClinicalVisits(visitsData.data || []);
+        }
+      } catch (err) {
+        console.error('Error fetching clinical visits:', err);
+        setClinicalVisits([]);
       }
     } catch (error) {
       console.error('Error fetching profile:', error);
@@ -1195,15 +1316,13 @@ const Profile = () => {
                 fontSize: '14px',
                 fontWeight: 600,
                 backgroundColor:
-                  patient.arpa_risk_score >= 70
-                    ? '#dc3545'
+                  patient.arpa_risk_score >= 75
+                    ? '#dc3545' // Critical (🔴 Red)
                     : patient.arpa_risk_score >= 50
-                    ? '#fd7e14'
-                    : patient.arpa_risk_score >= 40
-                    ? '#ffc107'
-                    : patient.arpa_risk_score >= 20
-                    ? '#17a2b8'
-                    : '#28a745',
+                    ? '#fd7e14' // High (🟠 Orange)
+                    : patient.arpa_risk_score >= 25
+                    ? '#ffc107' // Medium (🟡 Yellow)
+                    : '#28a745', // Low (🟢 Green)
                 color: 'white',
               }}
             >
@@ -1224,22 +1343,22 @@ const Profile = () => {
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
             {riskScores.map((score, index) => {
+              // Align with ARPA_DOCUMENTATION.md risk levels: 0-24 Low, 25-49 Medium, 50-74 High, 75-100 Critical
+              const scoreValue = score.score || score.arpa_risk_score || 0;
               const riskLevel = score.risk_level || 
-                (score.score >= 70 ? 'HIGH' :
-                 score.score >= 50 ? 'MEDIUM-HIGH' :
-                 score.score >= 40 ? 'MEDIUM' :
-                 score.score >= 20 ? 'LOW-MEDIUM' : 'LOW');
+                (scoreValue >= 75 ? 'CRITICAL' :
+                 scoreValue >= 50 ? 'HIGH' :
+                 scoreValue >= 25 ? 'MEDIUM' :
+                 'LOW');
               
               const riskColor =
-                riskLevel === 'HIGH'
-                  ? '#dc3545'
-                  : riskLevel === 'MEDIUM-HIGH'
-                  ? '#fd7e14'
+                riskLevel === 'CRITICAL'
+                  ? '#dc3545' // Red
+                  : riskLevel === 'HIGH'
+                  ? '#fd7e14' // Orange (🟠)
                   : riskLevel === 'MEDIUM'
-                  ? '#ffc107'
-                  : riskLevel === 'LOW-MEDIUM'
-                  ? '#17a2b8'
-                  : '#28a745';
+                  ? '#ffc107' // Yellow (🟡)
+                  : '#28a745'; // Green (🟢)
 
               const isCurrent = index === 0 && score.score === patient?.arpa_risk_score;
 
@@ -1310,54 +1429,168 @@ const Profile = () => {
                     </div>
                   )}
                   
+                  {/* Component Breakdown with Progress Bars - as per ARPA_DOCUMENTATION.md */}
                   {score.risk_factors && typeof score.risk_factors === 'object' && (
-                    <details style={{ marginTop: '12px' }}>
-                      <summary
-                        style={{
-                          cursor: 'pointer',
-                          color: '#6c757d',
-                          fontSize: '13px',
-                          fontWeight: 500,
-                          userSelect: 'none',
-                        }}
-                      >
-                        View Risk Factors
-                      </summary>
-                      <div
-                        style={{
-                          marginTop: '10px',
-                          padding: '12px',
-                          backgroundColor: '#f8f9fa',
-                          borderRadius: '4px',
-                          fontSize: '13px',
-                        }}
-                      >
-                        {Object.entries(score.risk_factors).map(([key, value]) => {
-                          const formattedKey = key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase());
-                          let displayValue = value;
-                          if (typeof value === 'object' && value !== null) {
-                            if (Array.isArray(value)) {
-                              displayValue = value.join(', ');
-                            } else {
-                              displayValue = JSON.stringify(value);
-                            }
-                          } else if (typeof value === 'number') {
-                            displayValue = value.toFixed(2);
-                          }
-                          
-                          return (
-                            <div key={key} style={{ marginBottom: '6px', display: 'flex', justifyContent: 'space-between' }}>
-                              <span style={{ color: '#6c757d' }}>
-                                {formattedKey}:
-                              </span>
-                              <span style={{ fontWeight: 500, color: '#495057' }}>
-                                {String(displayValue)}
+                    <div style={{ marginTop: '15px' }}>
+                      <div style={{ fontSize: '13px', fontWeight: 600, color: '#495057', marginBottom: '12px' }}>
+                        Component Breakdown
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                        {/* Medication Adherence Component (35% weight) */}
+                        {score.risk_factors.medicationAdherence !== undefined && (
+                          <div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                              <span style={{ fontSize: '12px', color: '#6c757d' }}>Medication Adherence (35%)</span>
+                              <span style={{ fontSize: '12px', fontWeight: 600, color: '#495057' }}>
+                                {score.risk_factors.medicationAdherence?.toFixed(1) || 0}%
                               </span>
                             </div>
-                          );
-                        })}
+                            <div style={{ height: '8px', backgroundColor: '#e9ecef', borderRadius: '4px', overflow: 'hidden' }}>
+                              <div
+                                style={{
+                                  width: `${Math.min(100, (score.risk_factors.medicationAdherence || 0))}%`,
+                                  height: '100%',
+                                  backgroundColor: 
+                                    (score.risk_factors.medicationAdherence || 0) >= 95 ? '#28a745' :
+                                    (score.risk_factors.medicationAdherence || 0) >= 80 ? '#ffc107' :
+                                    (score.risk_factors.medicationAdherence || 0) >= 70 ? '#fd7e14' : '#dc3545',
+                                  transition: 'width 0.3s ease',
+                                }}
+                              />
+                            </div>
+                          </div>
+                        )}
+                        
+                        {/* Appointment Attendance Component (25% weight) */}
+                        {score.risk_factors.appointmentMissedRate !== undefined && (
+                          <div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                              <span style={{ fontSize: '12px', color: '#6c757d' }}>Appointment Attendance (25%)</span>
+                              <span style={{ fontSize: '12px', fontWeight: 600, color: '#495057' }}>
+                                {score.risk_factors.appointmentAttendanceRate?.toFixed(1) || 0}% attendance
+                              </span>
+                            </div>
+                            <div style={{ height: '8px', backgroundColor: '#e9ecef', borderRadius: '4px', overflow: 'hidden' }}>
+                              <div
+                                style={{
+                                  width: `${Math.min(100, (score.risk_factors.appointmentAttendanceRate || 0))}%`,
+                                  height: '100%',
+                                  backgroundColor: 
+                                    (score.risk_factors.appointmentAttendanceRate || 0) >= 80 ? '#28a745' :
+                                    (score.risk_factors.appointmentAttendanceRate || 0) >= 60 ? '#ffc107' :
+                                    (score.risk_factors.appointmentAttendanceRate || 0) >= 40 ? '#fd7e14' : '#dc3545',
+                                  transition: 'width 0.3s ease',
+                                }}
+                              />
+                            </div>
+                          </div>
+                        )}
+                        
+                        {/* Lab Compliance Component (20% weight) */}
+                        {score.risk_factors.daysSinceLastLab !== undefined && (
+                          <div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                              <span style={{ fontSize: '12px', color: '#6c757d' }}>Lab Compliance (20%)</span>
+                              <span style={{ fontSize: '12px', fontWeight: 600, color: '#495057' }}>
+                                {score.risk_factors.daysSinceLastLab || 0} days since last lab
+                              </span>
+                            </div>
+                            <div style={{ height: '8px', backgroundColor: '#e9ecef', borderRadius: '4px', overflow: 'hidden' }}>
+                              <div
+                                style={{
+                                  width: `${Math.min(100, Math.max(0, 100 - ((score.risk_factors.daysSinceLastLab || 0) / 180) * 100))}%`,
+                                  height: '100%',
+                                  backgroundColor: 
+                                    (score.risk_factors.daysSinceLastLab || 0) <= 90 ? '#28a745' :
+                                    (score.risk_factors.daysSinceLastLab || 0) <= 180 ? '#ffc107' : '#dc3545',
+                                  transition: 'width 0.3s ease',
+                                }}
+                              />
+                            </div>
+                          </div>
+                        )}
+                        
+                        {/* Visit Frequency Component (20% weight) */}
+                        {score.risk_factors.daysSinceLastVisit !== undefined && (
+                          <div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                              <span style={{ fontSize: '12px', color: '#6c757d' }}>Visit Frequency (20%)</span>
+                              <span style={{ fontSize: '12px', fontWeight: 600, color: '#495057' }}>
+                                {score.risk_factors.daysSinceLastVisit || 0} days since last visit
+                              </span>
+                            </div>
+                            <div style={{ height: '8px', backgroundColor: '#e9ecef', borderRadius: '4px', overflow: 'hidden' }}>
+                              <div
+                                style={{
+                                  width: `${Math.min(100, Math.max(0, 100 - ((score.risk_factors.daysSinceLastVisit || 0) / 180) * 100))}%`,
+                                  height: '100%',
+                                  backgroundColor: 
+                                    (score.risk_factors.daysSinceLastVisit || 0) <= 30 ? '#28a745' :
+                                    (score.risk_factors.daysSinceLastVisit || 0) <= 90 ? '#ffc107' :
+                                    (score.risk_factors.daysSinceLastVisit || 0) <= 180 ? '#fd7e14' : '#dc3545',
+                                  transition: 'width 0.3s ease',
+                                }}
+                              />
+                            </div>
+                          </div>
+                        )}
                       </div>
-                    </details>
+                      
+                      {/* Detailed Risk Factors (collapsible) */}
+                      <details style={{ marginTop: '15px' }}>
+                        <summary
+                          style={{
+                            cursor: 'pointer',
+                            color: '#6c757d',
+                            fontSize: '13px',
+                            fontWeight: 500,
+                            userSelect: 'none',
+                          }}
+                        >
+                          View Detailed Risk Factors
+                        </summary>
+                        <div
+                          style={{
+                            marginTop: '10px',
+                            padding: '12px',
+                            backgroundColor: '#f8f9fa',
+                            borderRadius: '4px',
+                            fontSize: '13px',
+                          }}
+                        >
+                          {Object.entries(score.risk_factors).map(([key, value]) => {
+                            // Skip already displayed components
+                            if (['medicationAdherence', 'appointmentMissedRate', 'appointmentAttendanceRate', 
+                                 'daysSinceLastLab', 'daysSinceLastVisit'].includes(key)) {
+                              return null;
+                            }
+                            
+                            const formattedKey = key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase());
+                            let displayValue = value;
+                            if (typeof value === 'object' && value !== null) {
+                              if (Array.isArray(value)) {
+                                displayValue = value.join(', ');
+                              } else {
+                                displayValue = JSON.stringify(value);
+                              }
+                            } else if (typeof value === 'number') {
+                              displayValue = value.toFixed(2);
+                            }
+                            
+                            return (
+                              <div key={key} style={{ marginBottom: '6px', display: 'flex', justifyContent: 'space-between' }}>
+                                <span style={{ color: '#6c757d' }}>
+                                  {formattedKey}:
+                                </span>
+                                <span style={{ fontWeight: 500, color: '#495057' }}>
+                                  {String(displayValue)}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </details>
+                    </div>
                   )}
                   
                   {score.calculated_by_name && (
@@ -1370,6 +1603,378 @@ const Profile = () => {
             })}
           </div>
         )}
+
+        {/* Lab Results Summary */}
+        <div style={{ marginTop: '30px', paddingTop: '30px', borderTop: '2px solid #e9ecef' }}>
+          <h4
+            style={{
+              margin: '0 0 20px 0',
+              color: '#A31D1D',
+              fontSize: '16px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+            }}
+          >
+            <FileText size={18} />
+            Lab Results Summary
+          </h4>
+
+          {labResults.length === 0 ? (
+            <p style={{ color: '#6c757d', textAlign: 'center', padding: '20px' }}>
+              No lab results available
+            </p>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '15px' }}>
+              {/* CD4 Count */}
+              {(() => {
+                const cd4Results = labResults.filter(r => 
+                  r.test_code?.toLowerCase().includes('cd4') || 
+                  r.test_name?.toLowerCase().includes('cd4')
+                ).sort((a, b) => new Date(b.reported_at || b.collected_at || 0) - new Date(a.reported_at || a.collected_at || 0));
+                const latestCD4 = cd4Results[0];
+                
+                if (!latestCD4) return null;
+                
+                const cd4Value = parseFloat(latestCD4.result_value) || 0;
+                // Align with ARPA_DOCUMENTATION.md CD4 reference ranges
+                let cd4Label, cd4RiskLevel, cd4Color, cd4SystemAction;
+                if (cd4Value >= 500) {
+                  cd4Label = 'Normal';
+                  cd4RiskLevel = 'Normal';
+                  cd4Color = '#28a745';
+                  cd4SystemAction = null;
+                } else if (cd4Value >= 350) {
+                  cd4Label = 'Mild Immunosuppression';
+                  cd4RiskLevel = 'Mild';
+                  cd4Color = '#ffc107';
+                  cd4SystemAction = null;
+                } else if (cd4Value >= 200) {
+                  cd4Label = 'Moderate Immunosuppression';
+                  cd4RiskLevel = 'Moderate';
+                  cd4Color = '#fd7e14';
+                  cd4SystemAction = null;
+                } else {
+                  cd4Label = 'Severe Immunosuppression';
+                  cd4RiskLevel = 'Severe';
+                  cd4Color = '#dc3545';
+                  cd4SystemAction = 'Intensive follow-up, OI prophylaxis alert, patient prioritization';
+                }
+                
+                const trend = cd4Results.length >= 2 ? 
+                  (parseFloat(cd4Results[0].result_value) - parseFloat(cd4Results[1].result_value)) : null;
+                
+                return (
+                  <div
+                    style={{
+                      padding: '15px',
+                      border: '1px solid #e9ecef',
+                      borderRadius: '6px',
+                      backgroundColor: '#f8f9fa',
+                    }}
+                  >
+                    <div style={{ fontSize: '12px', color: '#6c757d', marginBottom: '5px' }}>CD4 Count</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                      <div style={{ fontSize: '20px', fontWeight: 700, color: cd4Color }}>
+                        {cd4Value.toLocaleString()}
+                      </div>
+                      {latestCD4.unit && (
+                        <div style={{ fontSize: '14px', color: '#6c757d' }}>{latestCD4.unit}</div>
+                      )}
+                      {trend !== null && (
+                        <div style={{ fontSize: '12px', color: trend >= 0 ? '#28a745' : '#dc3545' }}>
+                          {trend >= 0 ? '↑' : '↓'} {Math.abs(trend).toFixed(0)}
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ 
+                      fontSize: '11px', 
+                      fontWeight: 600,
+                      color: cd4Color, 
+                      marginTop: '5px',
+                      padding: '2px 6px',
+                      backgroundColor: cd4Color === '#dc3545' ? '#fee' : cd4Color === '#fd7e14' ? '#fff4e6' : cd4Color === '#ffc107' ? '#fffbf0' : '#f0f9f0',
+                      borderRadius: '3px',
+                      display: 'inline-block'
+                    }}>
+                      {cd4Label}
+                    </div>
+                    <div style={{ fontSize: '11px', color: '#6c757d', marginTop: '5px' }}>
+                      {latestCD4.reported_at ? formatDate(latestCD4.reported_at) : 'Date unknown'}
+                    </div>
+                    {cd4SystemAction && (
+                      <div style={{ fontSize: '11px', color: '#dc3545', marginTop: '5px', fontWeight: 600 }}>
+                        ⚠ {cd4SystemAction}
+                      </div>
+                    )}
+                    {latestCD4.is_critical && (
+                      <div style={{ fontSize: '11px', color: '#dc3545', marginTop: '5px', fontWeight: 600 }}>
+                        ⚠ Critical Value
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Viral Load */}
+              {(() => {
+                const vlResults = labResults.filter(r => 
+                  r.test_code?.toLowerCase().includes('vl') || 
+                  r.test_code?.toLowerCase().includes('viral') ||
+                  r.test_name?.toLowerCase().includes('viral load')
+                ).sort((a, b) => new Date(b.reported_at || b.collected_at || 0) - new Date(a.reported_at || a.collected_at || 0));
+                const latestVL = vlResults[0];
+                
+                if (!latestVL) return null;
+                
+                const vlText = latestVL.result_value?.toString().toLowerCase() || '';
+                const isUndetectable = vlText.includes('undetectable') || vlText.includes('<');
+                const vlNumeric = isUndetectable ? 0 : parseFloat(latestVL.result_value) || 0;
+                
+                // Align with ARPA_DOCUMENTATION.md Viral Load reference ranges
+                let vlLabel, vlRiskLevel, vlColor, vlSystemAction;
+                if (isUndetectable || vlNumeric < 50) {
+                  vlLabel = 'Undetectable';
+                  vlRiskLevel = 'Optimal';
+                  vlColor = '#28a745';
+                  vlSystemAction = null;
+                } else if (vlNumeric <= 200) {
+                  vlLabel = 'Controlled';
+                  vlRiskLevel = 'Low';
+                  vlColor = '#ffc107';
+                  vlSystemAction = null;
+                } else if (vlNumeric <= 10000) {
+                  vlLabel = 'Moderate';
+                  vlRiskLevel = 'Moderate';
+                  vlColor = '#fd7e14';
+                  vlSystemAction = null;
+                } else {
+                  vlLabel = 'High Risk';
+                  vlRiskLevel = 'High';
+                  vlColor = '#dc3545';
+                  vlSystemAction = 'Adherence counseling flag and treatment review';
+                }
+                
+                return (
+                  <div
+                    style={{
+                      padding: '15px',
+                      border: '1px solid #e9ecef',
+                      borderRadius: '6px',
+                      backgroundColor: '#f8f9fa',
+                    }}
+                  >
+                    <div style={{ fontSize: '12px', color: '#6c757d', marginBottom: '5px' }}>Viral Load (HIV RNA)</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                      <div style={{ fontSize: '20px', fontWeight: 700, color: vlColor }}>
+                        {isUndetectable ? 'Undetectable' : vlNumeric.toLocaleString()}
+                      </div>
+                      {!isUndetectable && latestVL.unit && (
+                        <div style={{ fontSize: '14px', color: '#6c757d' }}>{latestVL.unit}</div>
+                      )}
+                    </div>
+                    <div style={{ 
+                      fontSize: '11px', 
+                      fontWeight: 600,
+                      color: vlColor, 
+                      marginTop: '5px',
+                      padding: '2px 6px',
+                      backgroundColor: vlColor === '#dc3545' ? '#fee' : vlColor === '#fd7e14' ? '#fff4e6' : vlColor === '#ffc107' ? '#fffbf0' : '#f0f9f0',
+                      borderRadius: '3px',
+                      display: 'inline-block'
+                    }}>
+                      {vlLabel}
+                    </div>
+                    <div style={{ fontSize: '11px', color: '#6c757d', marginTop: '5px' }}>
+                      {latestVL.reported_at ? formatDate(latestVL.reported_at) : 'Date unknown'}
+                    </div>
+                    {vlSystemAction && (
+                      <div style={{ fontSize: '11px', color: '#dc3545', marginTop: '5px', fontWeight: 600 }}>
+                        ⚠ {vlSystemAction}
+                      </div>
+                    )}
+                    {latestVL.is_critical && (
+                      <div style={{ fontSize: '11px', color: '#dc3545', marginTop: '5px', fontWeight: 600 }}>
+                        ⚠ Critical Value
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Days Since Last Lab */}
+              {(() => {
+                const latestLab = labResults.sort((a, b) => 
+                  new Date(b.reported_at || b.collected_at || 0) - new Date(a.reported_at || a.collected_at || 0)
+                )[0];
+                
+                if (!latestLab) return null;
+                
+                const labDate = latestLab.reported_at || latestLab.collected_at;
+                const daysSince = labDate ? Math.floor((new Date() - new Date(labDate)) / (1000 * 60 * 60 * 24)) : null;
+                const daysColor = daysSince === null ? '#6c757d' : daysSince > 180 ? '#dc3545' : daysSince > 90 ? '#fd7e14' : '#28a745';
+                
+                return (
+                  <div
+                    style={{
+                      padding: '15px',
+                      border: '1px solid #e9ecef',
+                      borderRadius: '6px',
+                      backgroundColor: '#f8f9fa',
+                    }}
+                  >
+                    <div style={{ fontSize: '12px', color: '#6c757d', marginBottom: '5px' }}>Last Lab Test</div>
+                    <div style={{ fontSize: '20px', fontWeight: 700, color: daysColor }}>
+                      {daysSince === null ? 'N/A' : daysSince === 0 ? 'Today' : `${daysSince} days ago`}
+                    </div>
+                    {labDate && (
+                      <div style={{ fontSize: '11px', color: '#6c757d', marginTop: '5px' }}>
+                        {formatDate(labDate)}
+                      </div>
+                    )}
+                    {daysSince !== null && daysSince > 90 && (
+                      <div style={{ fontSize: '11px', color: '#dc3545', marginTop: '5px', fontWeight: 600 }}>
+                        ⚠ Lab test overdue
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+        </div>
+
+        {/* Medications Summary */}
+        <div style={{ marginTop: '30px', paddingTop: '30px', borderTop: '2px solid #e9ecef' }}>
+          <h4
+            style={{
+              margin: '0 0 20px 0',
+              color: '#A31D1D',
+              fontSize: '16px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+            }}
+          >
+            <CreditCard size={18} />
+            Medications & Adherence
+          </h4>
+
+          {/* Medication Adherence Summary */}
+          {medicationAdherence && (
+            <div
+              style={{
+                padding: '15px',
+                border: '1px solid #e9ecef',
+                borderRadius: '6px',
+                backgroundColor: '#f8f9fa',
+                marginBottom: '20px',
+              }}
+            >
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '15px' }}>
+                <div>
+                  <div style={{ fontSize: '12px', color: '#6c757d', marginBottom: '5px' }}>Adherence Rate</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <div style={{ fontSize: '24px', fontWeight: 700, color: 
+                      medicationAdherence.avg_adherence >= 95 ? '#28a745' :
+                      medicationAdherence.avg_adherence >= 80 ? '#ffc107' :
+                      medicationAdherence.avg_adherence >= 70 ? '#fd7e14' : '#dc3545'
+                    }}>
+                      {medicationAdherence.avg_adherence ? medicationAdherence.avg_adherence.toFixed(1) : 'N/A'}%
+                    </div>
+                    <div style={{ flex: 1, height: '8px', backgroundColor: '#e9ecef', borderRadius: '4px', overflow: 'hidden' }}>
+                      <div
+                        style={{
+                          width: `${medicationAdherence.avg_adherence || 0}%`,
+                          height: '100%',
+                          backgroundColor: 
+                            medicationAdherence.avg_adherence >= 95 ? '#28a745' :
+                            medicationAdherence.avg_adherence >= 80 ? '#ffc107' :
+                            medicationAdherence.avg_adherence >= 70 ? '#fd7e14' : '#dc3545',
+                          transition: 'width 0.3s ease',
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '12px', color: '#6c757d', marginBottom: '5px' }}>Total Records</div>
+                  <div style={{ fontSize: '18px', fontWeight: 600, color: '#495057' }}>
+                    {medicationAdherence.total_records || 0}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '12px', color: '#6c757d', marginBottom: '5px' }}>Missed Doses</div>
+                  <div style={{ fontSize: '18px', fontWeight: 600, color: medicationAdherence.missed_doses > 0 ? '#dc3545' : '#28a745' }}>
+                    {medicationAdherence.missed_doses || 0}
+                  </div>
+                </div>
+                {medicationAdherence.last_record_date && (
+                  <div>
+                    <div style={{ fontSize: '12px', color: '#6c757d', marginBottom: '5px' }}>Last Record</div>
+                    <div style={{ fontSize: '14px', fontWeight: 500, color: '#495057' }}>
+                      {formatDate(medicationAdherence.last_record_date)}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Active Medications List */}
+          {medications.length === 0 ? (
+            <p style={{ color: '#6c757d', textAlign: 'center', padding: '20px' }}>
+              No active medications
+            </p>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {medications.map((med, index) => (
+                <div
+                  key={med.prescription_item_id || `med-${index}`}
+                  style={{
+                    padding: '15px',
+                    border: '1px solid #e9ecef',
+                    borderRadius: '6px',
+                    backgroundColor: 'white',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 600, marginBottom: '5px', fontSize: '15px' }}>
+                        {med.medication_name || 'Unknown Medication'}
+                      </div>
+                      {med.dosage && (
+                        <div style={{ color: '#6c757d', fontSize: '14px', marginBottom: '3px' }}>
+                          Dosage: {med.dosage}
+                        </div>
+                      )}
+                      {med.frequency && (
+                        <div style={{ color: '#6c757d', fontSize: '14px' }}>
+                          Frequency: {med.frequency}
+                        </div>
+                      )}
+                      {med.start_date && (
+                        <div style={{ color: '#6c757d', fontSize: '12px', marginTop: '5px' }}>
+                          Started: {formatDate(med.start_date)}
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ 
+                      padding: '4px 8px',
+                      borderRadius: '4px',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      backgroundColor: med.status === 'active' ? '#d4edda' : '#f8d7da',
+                      color: med.status === 'active' ? '#155724' : '#721c24',
+                    }}>
+                      {med.status?.toUpperCase() || 'ACTIVE'}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Documents Section */}

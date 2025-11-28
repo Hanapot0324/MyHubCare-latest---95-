@@ -84,6 +84,7 @@ const Education = ({ socket }) => {
   const [faqs, setFaqs] = useState([]);
   const [forumThreads, setForumThreads] = useState([]);
   const [forumPosts, setForumPosts] = useState([]);
+  const [forumCategories, setForumCategories] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [faqsLoading, setFaqsLoading] = useState(false);
@@ -299,6 +300,7 @@ const Education = ({ socket }) => {
     setForumPosts(storedPosts);
     
     await fetchFAQs();
+    await loadForumCategories();
     await loadForumThreads();
     
     setLoading(false);
@@ -349,6 +351,31 @@ const Education = ({ socket }) => {
       console.error('Error fetching FAQs:', error);
     } finally {
       setFaqsLoading(false);
+    }
+  };
+
+  const loadForumCategories = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${API_BASE_URL}/forum/categories`, {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      });
+      const data = await response.json();
+      
+      if (data.success) {
+        setForumCategories(data.categories || []);
+        // Set default category if available
+        if (data.categories.length > 0 && !newThreadCategory) {
+          const generalCategory = data.categories.find(c => c.category_code === 'general');
+          if (generalCategory) {
+            setNewThreadCategory('general');
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error loading forum categories:', error);
     }
   };
 
@@ -423,7 +450,7 @@ const Education = ({ socket }) => {
       const data = await response.json();
       
       if (data.success) {
-        setToast({ message: 'Discussion created successfully!', type: 'success' });
+        setToast({ message: data.message || 'Discussion created successfully! Your post is pending moderation.', type: 'success' });
         setShowNewThreadDialog(false);
         resetNewThreadForm();
         loadForumThreads();
@@ -463,7 +490,7 @@ const Education = ({ socket }) => {
         setPostContent('');
         setReplyToPost(null);
         loadThreadDetails(selectedThread.topic_id);
-        setToast({ message: 'Message posted!', type: 'success' });
+        setToast({ message: data.message || 'Message posted! Your reply is pending moderation.', type: 'success' });
       } else {
         setToast({ message: data.message || 'Failed to post message', type: 'error' });
       }
@@ -1692,20 +1719,30 @@ const Education = ({ socket }) => {
               required
             />
             
-            <TextField
-              fullWidth
-              label="Category"
-              select
-              value={newThreadCategory}
-              onChange={(e) => setNewThreadCategory(e.target.value)}
-              sx={{ mb: 2 }}
-            >
-              <MenuItem value="general">General</MenuItem>
-              <MenuItem value="health">Health</MenuItem>
-              <MenuItem value="art">Art & Creativity</MenuItem>
-              <MenuItem value="support">Support</MenuItem>
-              <MenuItem value="announcement">Announcement</MenuItem>
-            </TextField>
+            <FormControl fullWidth sx={{ mb: 2 }}>
+              <InputLabel>Category</InputLabel>
+              <Select
+                value={newThreadCategory}
+                label="Category"
+                onChange={(e) => setNewThreadCategory(e.target.value)}
+              >
+                {forumCategories.length > 0 ? (
+                  forumCategories.map((category) => (
+                    <MenuItem key={category.category_id} value={category.category_code}>
+                      {category.icon} {category.category_name}
+                    </MenuItem>
+                  ))
+                ) : (
+                  <>
+                    <MenuItem value="general">💬 General</MenuItem>
+                    <MenuItem value="health">🏥 Health</MenuItem>
+                    <MenuItem value="art">🎨 Art & Creativity</MenuItem>
+                    <MenuItem value="support">🤝 Support</MenuItem>
+                    <MenuItem value="announcement">📢 Announcement</MenuItem>
+                  </>
+                )}
+              </Select>
+            </FormControl>
             
             <TextField
               fullWidth

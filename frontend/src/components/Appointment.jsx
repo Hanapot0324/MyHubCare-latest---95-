@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ChevronLeft, ChevronRight, X, Check, Trash2, Calendar, Clock, User, MapPin, Filter } from 'lucide-react';
+import { ChevronLeft, ChevronRight, X, Check, Trash2, Calendar, Clock, User, MapPin, Filter, ArrowUpDown, ChevronDown } from 'lucide-react';
 import { AccessTime, LocationOn, LocalHospital } from '@mui/icons-material';
 
 const API_BASE_URL = 'http://localhost:5000/api';
@@ -15,6 +15,8 @@ const Appointments = ({ socket }) => {
     const [showEditModal, setShowEditModal] = useState(false);
     const [selectedAppointment, setSelectedAppointment] = useState(null);
     const [viewMode, setViewMode] = useState('calendar'); // calendar or list
+    const [sortOrder, setSortOrder] = useState('latest'); // 'latest' (newest first) or 'oldest' (oldest first)
+    const [showSortDropdown, setShowSortDropdown] = useState(false);
     
     // For form dropdowns
     const [patients, setPatients] = useState([]);
@@ -67,6 +69,14 @@ const Appointments = ({ socket }) => {
         }
     }, [socket, currentPatientId]);
 
+    // Join user room for real-time notifications (for physicians, case managers, etc.)
+    useEffect(() => {
+        if (socket && currentUser?.user_id) {
+            socket.emit('joinRoom', currentUser.user_id);
+            console.log('Joined user room:', currentUser.user_id);
+        }
+    }, [socket, currentUser]);
+
     // Listen for real-time appointment notifications
     useEffect(() => {
         if (!socket) return;
@@ -114,9 +124,45 @@ const Appointments = ({ socket }) => {
             fetchAppointments();
         });
 
+        // Listen for appointment updates (when appointments are created/updated/cancelled)
+        socket.on('appointmentUpdated', (data) => {
+            console.log('🔄 Appointment updated via socket:', data);
+            // Refresh appointments list to show latest data
+            fetchAppointments();
+            
+            // Show toast notification
+            if (data.action === 'created') {
+                setToast({
+                    message: 'New appointment has been scheduled',
+                    type: 'success'
+                });
+            }
+        });
+
+        // Listen for new notifications that might be about appointments
+        socket.on('newNotification', (data) => {
+            console.log('📢 New notification received:', data);
+            
+            // If notification is about appointments, refresh the list
+            if (data.type === 'appointment_scheduled' || 
+                data.type === 'appointment_created' ||
+                data.type === 'appointment_updated') {
+                console.log('🔄 Notification related to appointment, refreshing...');
+                fetchAppointments();
+                
+                // Show toast
+                setToast({
+                    message: data.message || data.title || 'Appointment updated',
+                    type: 'success'
+                });
+            }
+        });
+
         return () => {
             socket.off('newAppointment');
             socket.off('appointmentNotification');
+            socket.off('appointmentUpdated');
+            socket.off('newNotification');
         };
     }, [socket]);
 
@@ -169,12 +215,19 @@ const Appointments = ({ socket }) => {
     };
 
     useEffect(() => {
+        // Sort appointments based on sortOrder
+        const sortedAppointments = [...appointments].sort((a, b) => {
+            const dateA = new Date(a.scheduled_start);
+            const dateB = new Date(b.scheduled_start);
+            return sortOrder === 'latest' ? dateB - dateA : dateA - dateB;
+        });
+        
         if (selectedDay) {
-            filterAppointmentsByDay(selectedDay);
+            filterAppointmentsByDay(selectedDay, sortedAppointments);
         } else {
             setFilteredAppointments([]);
         }
-    }, [selectedDay, appointments]);
+    }, [selectedDay, appointments, sortOrder]);
 
     // Auto-hide toast after 3 seconds
     useEffect(() => {
@@ -185,6 +238,23 @@ const Appointments = ({ socket }) => {
             return () => clearTimeout(timer);
         }
     }, [toast]);
+
+    // Close sort dropdown when clicking outside
+    useEffect(() => {
+        const handleClickOutside = (event) => {
+            if (showSortDropdown && !event.target.closest('.sort-dropdown-container')) {
+                setShowSortDropdown(false);
+            }
+        };
+
+        if (showSortDropdown) {
+            document.addEventListener('mousedown', handleClickOutside);
+        }
+
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+        };
+    }, [showSortDropdown]);
 
     const fetchAppointments = async () => {
         try {
@@ -330,14 +400,15 @@ const Appointments = ({ socket }) => {
         }
     };
 
-    const filterAppointmentsByDay = (day) => {
+    const filterAppointmentsByDay = (day, appointmentsToFilter = null) => {
         if (!day) {
             setFilteredAppointments([]);
             return;
         }
         
+        const appointmentsList = appointmentsToFilter || appointments;
         const dateStr = `${currentMonth.getFullYear()}-${String(currentMonth.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-        const filtered = appointments.filter(apt => {
+        const filtered = appointmentsList.filter(apt => {
             const aptDate = new Date(apt.scheduled_start);
             const aptDateStr = `${aptDate.getFullYear()}-${String(aptDate.getMonth() + 1).padStart(2, '0')}-${String(aptDate.getDate()).padStart(2, '0')}`;
             return aptDateStr === dateStr;
@@ -454,7 +525,8 @@ const Appointments = ({ socket }) => {
             
             // Convert form data to API format (MySQL DATETIME format: YYYY-MM-DD HH:MM:SS)
             const scheduledStart = `${newAppointment.appointmentDate} ${newAppointment.appointmentTime}:00`;
-            const scheduledEnd = calculateEndTime(newAppointment.appointmentDate, newAppointment.appointmentTime, newAppointment.duration_minutes || 30);
+            // Module 6: Enforce 60-minute duration
+            const scheduledEnd = calculateEndTime(newAppointment.appointmentDate, newAppointment.appointmentTime, 60);
 
             // Check availability before creating
             const isAvailable = await checkAvailability(
@@ -479,7 +551,7 @@ const Appointments = ({ socket }) => {
                 appointment_type: newAppointment.appointment_type,
                 scheduled_start: scheduledStart,
                 scheduled_end: scheduledEnd,
-                duration_minutes: newAppointment.duration_minutes || 30,
+                duration_minutes: 60, // Module 6: Fixed 60-minute duration
                 reason: newAppointment.reason || null,
                 notes: newAppointment.notes || null
             };
@@ -525,8 +597,8 @@ const Appointments = ({ socket }) => {
                 facility_id: updatedAppointment.facility_id,
                 appointment_type: updatedAppointment.appointment_type,
                 scheduled_start: scheduledStart,
-                scheduled_end: calculateEndTime(updatedAppointment.appointmentDate, updatedAppointment.appointmentTime, updatedAppointment.duration_minutes || 30),
-                duration_minutes: updatedAppointment.duration_minutes || 30,
+                scheduled_end: calculateEndTime(updatedAppointment.appointmentDate, updatedAppointment.appointmentTime, 60),
+                duration_minutes: 60, // Module 6: Fixed 60-minute duration
                 reason: updatedAppointment.reason || null,
                 notes: updatedAppointment.notes || null
             };
@@ -785,12 +857,13 @@ const Appointments = ({ socket }) => {
             
             // Check if current user can edit this appointment (for full editing)
             // Admin cannot delete appointments, so exclude admin from canEdit for delete button
-            const canEdit = (currentUserRole === 'physician' || currentUserRole === 'case_manager') &&
+            // Physicians cannot edit or cancel appointments
+            const canEdit = currentUserRole === 'case_manager' &&
                            (apt.status === 'scheduled' || apt.status === 'confirmed' || 
                             apt.status === 'pending_provider_confirmation' || apt.status === 'pending_patient_confirmation');
             
-            // Check if user can edit provider (always true for authorized users)
-            const canEditProvider = currentUserRole === 'physician' || currentUserRole === 'case_manager' || currentUserRole === 'admin';
+            // Check if user can edit provider (case managers and admins only, physicians excluded)
+            const canEditProvider = currentUserRole === 'case_manager' || currentUserRole === 'admin';
             
             // All appointments are clickable (for viewing/editing)
             const isClickable = true;
@@ -1009,7 +1082,115 @@ const Appointments = ({ socket }) => {
                         <h2 style={{ margin: '0 0 5px 0', color: 'white', fontSize: '24px', fontWeight: 'bold' }}>Appointment Calendar</h2>
                         <p style={{ margin: 0, color: '#F8F2DE', fontSize: '16px' }}>Manage and view your appointments</p>
                     </div>
-                    <div style={{ display: 'flex', gap: '10px' }}>
+                    <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                        {/* Sort Dropdown */}
+                        <div className="sort-dropdown-container" style={{ position: 'relative' }}>
+                            <button 
+                                onClick={() => setShowSortDropdown(!showSortDropdown)}
+                                style={{
+                                    padding: '10px 16px',
+                                    background: '#ECDCBF',
+                                    color: '#A31D1D',
+                                    border: 'none',
+                                    borderRadius: '6px',
+                                    cursor: 'pointer',
+                                    transition: 'all 0.2s ease',
+                                    fontWeight: '500',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '5px'
+                                }}
+                                onMouseEnter={(e) => {
+                                    e.target.style.background = '#F8F2DE';
+                                    e.target.style.transform = 'translateY(-1px)';
+                                }}
+                                onMouseLeave={(e) => {
+                                    e.target.style.background = '#ECDCBF';
+                                    e.target.style.transform = 'translateY(0)';
+                                }}
+                            >
+                                <ArrowUpDown size={16} />
+                                Sort: {sortOrder === 'latest' ? 'Latest First' : 'Oldest First'}
+                                <ChevronDown size={14} />
+                            </button>
+                            {showSortDropdown && (
+                                <div style={{
+                                    position: 'absolute',
+                                    top: '100%',
+                                    right: 0,
+                                    marginTop: '8px',
+                                    background: 'white',
+                                    borderRadius: '8px',
+                                    boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                                    minWidth: '180px',
+                                    zIndex: 1000,
+                                    border: '1px solid #F8F2DE',
+                                    overflow: 'hidden'
+                                }}>
+                                    <button
+                                        onClick={() => {
+                                            setSortOrder('latest');
+                                            setShowSortDropdown(false);
+                                        }}
+                                        style={{
+                                            width: '100%',
+                                            padding: '12px 16px',
+                                            background: sortOrder === 'latest' ? '#F8F2DE' : 'white',
+                                            color: '#A31D1D',
+                                            border: 'none',
+                                            cursor: 'pointer',
+                                            textAlign: 'left',
+                                            fontSize: '14px',
+                                            fontWeight: sortOrder === 'latest' ? '600' : '400',
+                                            transition: 'all 0.2s ease',
+                                            borderBottom: '1px solid #F8F2DE'
+                                        }}
+                                        onMouseEnter={(e) => {
+                                            if (sortOrder !== 'latest') {
+                                                e.target.style.background = '#F8F2DE';
+                                            }
+                                        }}
+                                        onMouseLeave={(e) => {
+                                            if (sortOrder !== 'latest') {
+                                                e.target.style.background = 'white';
+                                            }
+                                        }}
+                                    >
+                                        Latest First
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            setSortOrder('oldest');
+                                            setShowSortDropdown(false);
+                                        }}
+                                        style={{
+                                            width: '100%',
+                                            padding: '12px 16px',
+                                            background: sortOrder === 'oldest' ? '#F8F2DE' : 'white',
+                                            color: '#A31D1D',
+                                            border: 'none',
+                                            cursor: 'pointer',
+                                            textAlign: 'left',
+                                            fontSize: '14px',
+                                            fontWeight: sortOrder === 'oldest' ? '600' : '400',
+                                            transition: 'all 0.2s ease'
+                                        }}
+                                        onMouseEnter={(e) => {
+                                            if (sortOrder !== 'oldest') {
+                                                e.target.style.background = '#F8F2DE';
+                                            }
+                                        }}
+                                        onMouseLeave={(e) => {
+                                            if (sortOrder !== 'oldest') {
+                                                e.target.style.background = 'white';
+                                            }
+                                        }}
+                                    >
+                                        Oldest First
+                                    </button>
+                                </div>
+                            )}
+                        </div>
                         <button 
                             onClick={() => setViewMode(viewMode === 'calendar' ? 'list' : 'calendar')}
                             style={{
@@ -1037,8 +1218,8 @@ const Appointments = ({ socket }) => {
                             {viewMode === 'calendar' ? <Filter size={16} /> : <Calendar size={16} />}
                             {viewMode === 'calendar' ? 'List View' : 'Calendar View'}
                         </button>
-                        {/* Only show Book Appointment button for physicians, case managers, and admins */}
-                        {(currentUserRole === 'physician' || currentUserRole === 'case_manager' || currentUserRole === 'admin') && (
+                        {/* Only show Book Appointment button for case managers and admins */}
+                        {(currentUserRole === 'case_manager' || currentUserRole === 'admin') && (
                             <button 
                                 onClick={() => setShowAddModal(true)}
                                 style={{
@@ -1197,7 +1378,15 @@ const Appointments = ({ socket }) => {
                             Loading appointments...
                         </div>
                     ) : (
-                        renderAppointmentList(viewMode === 'calendar' ? filteredAppointments : appointments)
+                        renderAppointmentList(viewMode === 'calendar' ? filteredAppointments : (() => {
+                            // Sort appointments based on sortOrder for list view
+                            const sorted = [...appointments].sort((a, b) => {
+                                const dateA = new Date(a.scheduled_start);
+                                const dateB = new Date(b.scheduled_start);
+                                return sortOrder === 'latest' ? dateB - dateA : dateA - dateB;
+                            });
+                            return sorted;
+                        })())
                     )}
                 </div>
             </div>
@@ -1313,14 +1502,18 @@ const AppointmentModal = ({ mode, appointment, patients, facilities, providers, 
         ? currentPatientId 
         : (appointment ? appointment.patient_id : '');
 
-    // Only show provider field for physician and case_manager roles
-    const canEditProvider = currentUserRole === 'physician' || currentUserRole === 'case_manager' || currentUserRole === 'admin';
+    // Provider field visibility and editability:
+    // - case_manager and admin: can see and edit provider field in both add and edit modes
+    // - physician: can see provider field in add mode (to select), but CANNOT edit it in edit mode
+    // - other roles: cannot see provider field
+    const canSeeProvider = currentUserRole === 'physician' || currentUserRole === 'case_manager' || currentUserRole === 'admin';
+    const canEditProvider = currentUserRole === 'case_manager' || currentUserRole === 'admin';
     
     // Determine if form should be editable
     // In add mode: all fields are editable
-    // In edit mode: only provider field is editable, all other fields are read-only
+    // In edit mode: only provider field is editable for case_manager/admin, all other fields are read-only
     const isEditable = mode === 'add' ? true : false;
-    const canEditProviderField = mode === 'add' ? true : (canEdit && canEditProvider);
+    const canEditProviderField = mode === 'add' ? canSeeProvider : (canEdit && canEditProvider);
 
     const [formData, setFormData] = useState(
         appointment ? {
@@ -1330,7 +1523,7 @@ const AppointmentModal = ({ mode, appointment, patients, facilities, providers, 
             appointment_type: appointment.appointment_type,
             appointmentDate: parsedDateTime.date,
             appointmentTime: parsedDateTime.time,
-            duration_minutes: appointment.duration_minutes || 30,
+            duration_minutes: 60, // Module 6: Fixed 60-minute duration
             reason: appointment.reason || '',
             notes: appointment.notes || ''
         } : {
@@ -1340,7 +1533,7 @@ const AppointmentModal = ({ mode, appointment, patients, facilities, providers, 
             appointment_type: '',
             appointmentDate: '',
             appointmentTime: '',
-            duration_minutes: 30,
+            duration_minutes: 60, // Module 6: Fixed 60-minute duration
             reason: '',
             notes: ''
         }
@@ -1504,7 +1697,11 @@ const AppointmentModal = ({ mode, appointment, patients, facilities, providers, 
                                 onChange={handleChange}
                                 required
                                 disabled={!isEditable}
-                                min={new Date().toISOString().split('T')[0]}
+                                min={(() => {
+                                    const tomorrow = new Date();
+                                    tomorrow.setDate(tomorrow.getDate() + 1);
+                                    return tomorrow.toISOString().split('T')[0];
+                                })()}
                                 style={{
                                     width: '100%',
                                     padding: '12px',
@@ -1569,8 +1766,9 @@ const AppointmentModal = ({ mode, appointment, patients, facilities, providers, 
                         </select>
                     </div>
 
-                    {/* Only show provider field for physician and case_manager roles */}
-                    {canEditProvider && (
+                    {/* Show provider field for physician, case_manager, and admin roles */}
+                    {/* Physicians can see it in add mode but cannot edit it in edit mode */}
+                    {canSeeProvider && (
                         <div style={{ marginBottom: '20px' }}>
                             <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold', color: '#A31D1D' }}>
                                 Provider
@@ -1637,12 +1835,10 @@ const AppointmentModal = ({ mode, appointment, patients, facilities, providers, 
                             <input 
                                 type="number"
                                 name="duration_minutes"
-                                value={formData.duration_minutes}
+                                value="60"
                                 onChange={handleChange}
-                                min="15"
-                                max="240"
-                                step="15"
-                                disabled={!isEditable}
+                                disabled={true}
+                                title="Appointment duration is fixed at 60 minutes per Module 6 specification"
                                 style={{
                                     width: '100%',
                                     padding: '12px',

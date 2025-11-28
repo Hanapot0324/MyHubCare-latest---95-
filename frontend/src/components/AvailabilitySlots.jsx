@@ -9,10 +9,6 @@ const AvailabilitySlots = ({ socket }) => {
     const [toast, setToast] = useState(null);
     const [showModal, setShowModal] = useState(false);
     const [showCreateModal, setShowCreateModal] = useState(false);
-    const [showAcceptModal, setShowAcceptModal] = useState(false);
-    const [selectedSlot, setSelectedSlot] = useState(null);
-    const [selectedAppointment, setSelectedAppointment] = useState(null);
-    const [appointments, setAppointments] = useState([]);
     const [searchTerm, setSearchTerm] = useState('');
     const [createMode, setCreateMode] = useState('single'); // 'single' or 'bulk'
     const [createFormData, setCreateFormData] = useState({
@@ -141,13 +137,18 @@ const AvailabilitySlots = ({ socket }) => {
     useEffect(() => {
         fetchFacilities();
         fetchProviders();
-        fetchAppointments();
-        fetchSlots();
     }, []);
 
+    // Fetch slots when component mounts or when backend filters change
+    useEffect(() => {
+        fetchSlots();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [filters.facility_id, filters.provider_id, filters.date, filters.date_from, filters.date_to, filters.status]);
+
+    // Apply client-side filters (search term only, status is handled by backend)
     useEffect(() => {
         applyFilters();
-    }, [slots, filters, searchTerm]);
+    }, [slots, searchTerm]);
 
     // Listen for real-time appointment updates to refresh slots
     useEffect(() => {
@@ -155,11 +156,13 @@ const AvailabilitySlots = ({ socket }) => {
             // Listen for new appointments being created
             const handleNewNotification = (data) => {
                 // Check if it's an appointment-related notification
-                if (data.type === 'appointment_created' || data.type === 'appointment_slot_confirmed' || data.appointment_id) {
+                if (data.type === 'appointment_created' || 
+                    data.type === 'appointment_slot_confirmed' || 
+                    data.type === 'appointment_request_approved' ||
+                    data.appointment_id) {
                     console.log('Appointment change detected, refreshing availability slots...');
                     // Refresh slots to show updated booking status
                     fetchSlots();
-                    fetchAppointments();
                 }
             };
 
@@ -167,14 +170,12 @@ const AvailabilitySlots = ({ socket }) => {
             const handleAppointmentUpdated = (data) => {
                 console.log('Appointment updated, refreshing availability slots...');
                 fetchSlots();
-                fetchAppointments();
             };
 
             // Listen for appointment cancellations
             const handleAppointmentCancelled = (data) => {
                 console.log('Appointment cancelled, refreshing availability slots...');
                 fetchSlots();
-                fetchAppointments();
             };
 
             socket.on('newNotification', handleNewNotification);
@@ -198,6 +199,101 @@ const AvailabilitySlots = ({ socket }) => {
         return () => clearInterval(interval);
     }, []);
 
+    // Periodically check and update ALL expired slots (not just visible ones)
+    useEffect(() => {
+        const checkAndUpdateExpiredSlots = async () => {
+            try {
+                const token = getAuthToken();
+                if (!token) return;
+
+                // Fetch all available slots (no date filter) to check for expired ones
+                const response = await fetch(`${API_BASE_URL}/appointments/availability/slots?status=available`, {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    await updateExpiredSlots(data.data || []);
+                }
+            } catch (error) {
+                console.error('Error checking expired slots:', error);
+            }
+        };
+
+        // Check immediately on mount
+        checkAndUpdateExpiredSlots();
+
+        // Then check every 5 minutes
+        const interval = setInterval(checkAndUpdateExpiredSlots, 5 * 60 * 1000);
+
+        return () => clearInterval(interval);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // Function to update expired slots to 'unavailable' status
+    const updateExpiredSlots = async (slotsData) => {
+        try {
+            const token = getAuthToken();
+            if (!token) return false;
+
+            const now = new Date();
+            const expiredSlots = slotsData.filter(slot => {
+                if (!slot.slot_date || slot.slot_status !== 'available' || slot.appointment_id) {
+                    return false;
+                }
+                
+                // Check if slot date has passed
+                const slotDate = new Date(slot.slot_date);
+                slotDate.setHours(0, 0, 0, 0);
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+                
+                // If slot date is before today, it's expired
+                if (slotDate < today) {
+                    return true;
+                }
+                
+                // If slot date is today, check if end time has passed
+                if (slotDate.getTime() === today.getTime() && slot.end_time) {
+                    const slotEnd = new Date(`${slot.slot_date} ${slot.end_time}`);
+                    return slotEnd < now;
+                }
+                
+                return false;
+            });
+
+            // Update expired slots in batch
+            if (expiredSlots.length > 0) {
+                console.log(`Updating ${expiredSlots.length} expired slot(s) to unavailable status...`);
+                
+                const updatePromises = expiredSlots.map(slot =>
+                    fetch(`${API_BASE_URL}/appointments/availability/slots/${slot.slot_id}`, {
+                        method: 'PUT',
+                        headers: {
+                            Authorization: `Bearer ${token}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            slot_status: 'unavailable'
+                        })
+                    }).catch(error => {
+                        console.error(`Failed to update expired slot ${slot.slot_id}:`, error);
+                        return null;
+                    })
+                );
+
+                await Promise.all(updatePromises);
+                console.log(`Successfully updated ${expiredSlots.length} expired slot(s)`);
+                return true; // Indicate that updates were made
+            }
+            return false; // No updates needed
+        } catch (error) {
+            console.error('Error updating expired slots:', error);
+            // Don't show toast for this - it's a background operation
+            return false;
+        }
+    };
+
     const fetchSlots = async () => {
         try {
             setLoading(true);
@@ -207,17 +303,55 @@ const AvailabilitySlots = ({ socket }) => {
             const params = new URLSearchParams();
             if (filters.facility_id) params.append('facility_id', filters.facility_id);
             if (filters.provider_id) params.append('provider_id', filters.provider_id);
-            if (filters.date) params.append('date', filters.date);
-            if (filters.date_from) params.append('date_from', filters.date_from);
-            if (filters.date_to) params.append('date_to', filters.date_to);
+            
+            // Only apply date filters if explicitly set by user
+            if (filters.date) {
+                params.append('date', filters.date);
+            } else if (filters.date_from || filters.date_to) {
+                // Only use date range if explicitly set
+                if (filters.date_from) params.append('date_from', filters.date_from);
+                if (filters.date_to) params.append('date_to', filters.date_to);
+            }
+            // If no date filters are set, fetch all slots (no date restriction)
+            
+            if (filters.status) params.append('status', filters.status);
 
-            const response = await fetch(`${API_BASE_URL}/appointments/availability/slots?${params}`, {
+            const url = `${API_BASE_URL}/appointments/availability/slots?${params}`;
+            console.log('Fetching availability slots from:', url);
+
+            const response = await fetch(url, {
                 headers: { Authorization: `Bearer ${token}` }
             });
 
             const data = await response.json();
+            console.log('Availability slots response:', { success: data.success, count: data.data?.length || 0 });
+            
             if (data.success) {
-                setSlots(data.data || []);
+                const slotsData = data.data || [];
+                console.log('Fetched slots:', slotsData.length, 'slots');
+                
+                // Update expired slots and refresh if any were updated
+                const updatesMade = await updateExpiredSlots(slotsData);
+                if (updatesMade) {
+                    // Refresh slots after updating expired ones to get the updated status
+                    // Use a small delay to ensure backend has processed the updates
+                    setTimeout(() => {
+                        // Re-fetch without triggering loading state
+                        fetch(url, {
+                            headers: { Authorization: `Bearer ${token}` }
+                        })
+                        .then(res => res.json())
+                        .then(refreshData => {
+                            if (refreshData.success) {
+                                console.log('Refreshed slots after update:', refreshData.data?.length || 0);
+                                setSlots(refreshData.data || []);
+                            }
+                        })
+                        .catch(err => console.error('Error refreshing slots after update:', err));
+                    }, 500);
+                } else {
+                    setSlots(slotsData);
+                }
             } else {
                 throw new Error(data.message || 'Failed to fetch slots');
             }
@@ -267,44 +401,48 @@ const AvailabilitySlots = ({ socket }) => {
         }
     };
 
-    const fetchAppointments = async () => {
-        try {
-            const token = getAuthToken();
-            if (!token) return;
-
-            // Fetch appointments that can be assigned to slots:
-            // - scheduled appointments (not yet assigned to a slot)
-            // - confirmed appointments that don't have a slot_id yet
-            // Exclude cancelled and no_show appointments
-            const response = await fetch(`${API_BASE_URL}/appointments`, {
-                headers: { Authorization: `Bearer ${token}` }
-            });
-
-            const data = await response.json();
-            if (data.success) {
-                // Filter to show only appointments that can be assigned to slots:
-                // - status is 'scheduled' or 'confirmed'
-                // - not cancelled or no_show
-                const availableAppointments = (data.data || []).filter(apt => {
-                    const isActive = apt.status === 'scheduled' || apt.status === 'confirmed';
-                    const isNotCancelled = apt.status !== 'cancelled' && apt.status !== 'no_show';
-                    return isActive && isNotCancelled;
-                });
-                setAppointments(availableAppointments);
-            }
-        } catch (error) {
-            console.error('Error fetching appointments:', error);
-        }
-    };
-
     const applyFilters = () => {
         let filtered = [...slots];
+        console.log('Applying filters to', filtered.length, 'slots');
 
+        // Only filter by date if a specific date filter is set
+        // Otherwise, show all slots (including past dates for management purposes)
+        if (filters.date) {
+            filtered = filtered.filter(slot => {
+                if (!slot.slot_date) return false;
+                return slot.slot_date === filters.date;
+            });
+        } else if (filters.date_from || filters.date_to) {
+            // If date range is set, filter by range
+            filtered = filtered.filter(slot => {
+                if (!slot.slot_date) return false;
+                const slotDate = new Date(slot.slot_date);
+                slotDate.setHours(0, 0, 0, 0);
+                
+                if (filters.date_from) {
+                    const fromDate = new Date(filters.date_from);
+                    fromDate.setHours(0, 0, 0, 0);
+                    if (slotDate < fromDate) return false;
+                }
+                
+                if (filters.date_to) {
+                    const toDate = new Date(filters.date_to);
+                    toDate.setHours(0, 0, 0, 0);
+                    if (slotDate > toDate) return false;
+                }
+                
+                return true;
+            });
+        }
+        // If no date filters are set, show all slots
+
+        // Status filter is now handled by backend, but keep client-side as fallback
+        // (in case backend doesn't support it or for additional filtering)
         if (filters.status) {
             filtered = filtered.filter(slot => slot.slot_status === filters.status);
         }
 
-        // Apply search term filter
+        // Apply search term filter (client-side only)
         if (searchTerm) {
             const searchLower = searchTerm.toLowerCase();
             filtered = filtered.filter(slot => {
@@ -316,84 +454,10 @@ const AvailabilitySlots = ({ socket }) => {
             });
         }
 
+        console.log('Filtered slots:', filtered.length);
         setFilteredSlots(filtered);
     };
 
-    const handleAcceptAppointment = async (slotId, appointmentId) => {
-        try {
-            setLoading(true);
-            const token = getAuthToken();
-            if (!token) return;
-
-            const response = await fetch(`${API_BASE_URL}/appointments/availability/slots/${slotId}/accept-appointment`, {
-                method: 'POST',
-                headers: {
-                    Authorization: `Bearer ${token}`,
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ appointment_id: appointmentId })
-            });
-
-            const data = await response.json();
-
-            if (data.success) {
-                showToast('Appointment accepted into slot successfully', 'success');
-                setShowAcceptModal(false);
-                setSelectedSlot(null);
-                setSelectedAppointment(null);
-                fetchSlots();
-                fetchAppointments();
-            } else {
-                // Handle different scenarios
-                const scenario = data.scenario;
-                let message = data.message || 'Failed to accept appointment';
-
-                switch (scenario) {
-                    case 'slot_already_booked':
-                        message = `Slot is already booked by another appointment (ID: ${data.slot?.appointment_id})`;
-                        break;
-                    case 'slot_blocked':
-                        message = 'Slot is blocked and cannot accept appointments';
-                        break;
-                    case 'slot_unavailable':
-                        message = 'Slot is marked as unavailable';
-                        break;
-                    case 'slot_expired':
-                        message = `Slot expired on ${data.slot?.slot_date} at ${data.slot?.end_time}`;
-                        break;
-                    case 'appointment_has_slot':
-                        message = `Appointment is already assigned to slot ${data.existing_slot?.slot_id}`;
-                        break;
-                    case 'time_mismatch':
-                        message = 'Appointment time does not match slot time range';
-                        break;
-                    case 'provider_mismatch':
-                        message = 'Provider mismatch between slot and appointment';
-                        break;
-                    case 'facility_mismatch':
-                        message = 'Facility mismatch between slot and appointment';
-                        break;
-                    case 'time_conflict':
-                        message = `Time conflict detected. ${data.conflicts?.length || 0} conflicting appointment(s) found`;
-                        break;
-                    default:
-                        message = data.message || 'Failed to accept appointment';
-                }
-
-                showToast(message, 'error');
-            }
-        } catch (error) {
-            console.error('Error accepting appointment:', error);
-            showToast('Failed to accept appointment: ' + error.message, 'error');
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const handleOpenAcceptModal = (slot) => {
-        setSelectedSlot(slot);
-        setShowAcceptModal(true);
-    };
 
     const handleCreateSlot = async () => {
         try {
@@ -708,11 +772,6 @@ const AvailabilitySlots = ({ socket }) => {
         return slotEnd < new Date();
     };
 
-    const canAcceptAppointment = (slot) => {
-        if (slot.slot_status !== 'available') return false;
-        if (isSlotExpired(slot)) return false;
-        return true;
-    };
 
     return (
         <div style={{ padding: '20px', backgroundColor: 'white', minHeight: '100vh', paddingTop: '100px' }}>
@@ -804,7 +863,9 @@ const AvailabilitySlots = ({ socket }) => {
                     />
                     <select
                         value={filters.status}
-                        onChange={(e) => setFilters({ ...filters, status: e.target.value })}
+                        onChange={(e) => {
+                            setFilters({ ...filters, status: e.target.value });
+                        }}
                         style={{
                             padding: '8px 12px 8px 36px',
                             border: '1px solid #ced4da',
@@ -838,7 +899,6 @@ const AvailabilitySlots = ({ socket }) => {
                             value={filters.facility_id}
                             onChange={(e) => {
                                 setFilters({ ...filters, facility_id: e.target.value });
-                                setTimeout(fetchSlots, 100);
                             }}
                             style={{
                                 width: '100%',
@@ -864,7 +924,6 @@ const AvailabilitySlots = ({ socket }) => {
                             value={filters.provider_id}
                             onChange={(e) => {
                                 setFilters({ ...filters, provider_id: e.target.value });
-                                setTimeout(fetchSlots, 100);
                             }}
                             style={{
                                 width: '100%',
@@ -891,7 +950,6 @@ const AvailabilitySlots = ({ socket }) => {
                             value={filters.date}
                             onChange={(e) => {
                                 setFilters({ ...filters, date: e.target.value });
-                                setTimeout(fetchSlots, 100);
                             }}
                             style={{
                                 width: '100%',
@@ -930,7 +988,6 @@ const AvailabilitySlots = ({ socket }) => {
                 }}>
                     {filteredSlots.map(slot => {
                         const expired = isSlotExpired(slot);
-                        const canAccept = canAcceptAppointment(slot);
 
                         return (
                             <div
@@ -1027,28 +1084,52 @@ const AvailabilitySlots = ({ socket }) => {
 
                                 {/* Actions */}
                                 <div style={{ display: 'flex', gap: '10px' }}>
-                                    {canAccept && (
-                                        <button
-                                            onClick={() => handleOpenAcceptModal(slot)}
-                                            style={{
-                                                flex: 1,
-                                                padding: '8px 16px',
-                                                background: '#28a745',
-                                                color: 'white',
-                                                border: 'none',
-                                                borderRadius: '4px',
-                                                cursor: 'pointer',
-                                                fontSize: '14px',
-                                                fontWeight: 'bold',
-                                                transition: 'background 0.2s ease'
-                                            }}
-                                            onMouseEnter={(e) => e.target.style.background = '#218838'}
-                                            onMouseLeave={(e) => e.target.style.background = '#28a745'}
-                                        >
-                                            Accept Appointment
-                                        </button>
+                                    {/* Show "Booked" for booked slots */}
+                                    {(slot.slot_status === 'booked' || slot.appointment_id) && (
+                                        <div style={{
+                                            flex: 1,
+                                            padding: '8px 16px',
+                                            background: '#007bff',
+                                            color: 'white',
+                                            border: 'none',
+                                            borderRadius: '4px',
+                                            fontSize: '14px',
+                                            fontWeight: 'bold',
+                                            textAlign: 'center',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            gap: '5px'
+                                        }}>
+                                            <CheckCircle size={16} />
+                                            Booked
+                                        </div>
                                     )}
-                                    {!canAccept && slot.slot_status === 'available' && expired && (
+                                    
+                                    {/* Show "Available" for available slots without appointments */}
+                                    {slot.slot_status === 'available' && !slot.appointment_id && !expired && (
+                                        <div style={{
+                                            flex: 1,
+                                            padding: '8px 16px',
+                                            background: '#28a745',
+                                            color: 'white',
+                                            border: 'none',
+                                            borderRadius: '4px',
+                                            fontSize: '14px',
+                                            fontWeight: 'bold',
+                                            textAlign: 'center',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            gap: '5px'
+                                        }}>
+                                            <CheckCircle size={16} />
+                                            Available
+                                        </div>
+                                    )}
+                                    
+                                    {/* Show "Expired" for expired available slots */}
+                                    {slot.slot_status === 'available' && expired && (
                                         <div style={{
                                             flex: 1,
                                             padding: '8px 16px',
@@ -1060,6 +1141,24 @@ const AvailabilitySlots = ({ socket }) => {
                                             textAlign: 'center'
                                         }}>
                                             Expired
+                                        </div>
+                                    )}
+                                    
+                                    {/* Show status for blocked/unavailable slots */}
+                                    {(slot.slot_status === 'blocked' || slot.slot_status === 'unavailable') && (
+                                        <div style={{
+                                            flex: 1,
+                                            padding: '8px 16px',
+                                            background: slot.slot_status === 'blocked' ? '#dc3545' : '#6c757d',
+                                            color: 'white',
+                                            border: 'none',
+                                            borderRadius: '4px',
+                                            fontSize: '14px',
+                                            fontWeight: 'bold',
+                                            textAlign: 'center',
+                                            textTransform: 'capitalize'
+                                        }}>
+                                            {slot.slot_status}
                                         </div>
                                     )}
                                 </div>
@@ -1723,184 +1822,6 @@ const AvailabilitySlots = ({ socket }) => {
                                 </>
                             )}
                         </form>
-                    </div>
-                </div>
-            )}
-
-            {/* Accept Appointment Modal */}
-            {showAcceptModal && selectedSlot && (
-                <div style={{
-                    position: 'fixed',
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    background: 'rgba(0,0,0,0.5)',
-                    display: 'flex',
-                    justifyContent: 'center',
-                    alignItems: 'center',
-                    zIndex: 1000
-                }}>
-                    <div style={{
-                        background: 'white',
-                        padding: '30px',
-                        borderRadius: '8px',
-                        width: '90%',
-                        maxWidth: '600px',
-                        maxHeight: '80vh',
-                        overflow: 'auto',
-                        boxShadow: '0 4px 20px rgba(0,0,0,0.15)'
-                    }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                            <h2 style={{ margin: 0, color: '#A31D1D' }}>Accept Appointment into Slot</h2>
-                            <button
-                                onClick={() => {
-                                    setShowAcceptModal(false);
-                                    setSelectedSlot(null);
-                                    setSelectedAppointment(null);
-                                }}
-                                style={{
-                                    background: 'none',
-                                    border: 'none',
-                                    cursor: 'pointer',
-                                    padding: '5px'
-                                }}
-                            >
-                                <X size={24} color="#6c757d" />
-                            </button>
-                        </div>
-
-                        {/* Slot Info */}
-                        <div style={{
-                            padding: '15px',
-                            background: '#f8f9fa',
-                            borderRadius: '4px',
-                            marginBottom: '20px'
-                        }}>
-                            <h3 style={{ margin: '0 0 10px 0', fontSize: '16px' }}>Selected Slot</h3>
-                            <div style={{ fontSize: '14px', color: '#6c757d' }}>
-                                <p><strong>Date:</strong> {formatDate(selectedSlot.slot_date)}</p>
-                                <p><strong>Time:</strong> {formatTime(selectedSlot.start_time)} - {formatTime(selectedSlot.end_time)}</p>
-                                <p><strong>Facility:</strong> {selectedSlot.facility_name || 'N/A'}</p>
-                                <p><strong>Provider:</strong> {selectedSlot.provider_name || 'N/A'}</p>
-                            </div>
-                        </div>
-
-                        {/* Available Appointments */}
-                        <div>
-                            <label style={{ display: 'block', marginBottom: '10px', fontWeight: 'bold' }}>
-                                Select Appointment to Accept
-                            </label>
-                            {appointments.length === 0 ? (
-                                <p style={{ color: '#6c757d', textAlign: 'center', padding: '20px' }}>
-                                    No appointments available to assign to this slot
-                                </p>
-                            ) : (
-                                <div style={{ maxHeight: '300px', overflowY: 'auto' }}>
-                                    {appointments
-                                        .filter(apt => {
-                                            // Filter appointments that match slot criteria
-                                            if (selectedSlot.facility_id && apt.facility_id !== selectedSlot.facility_id) return false;
-                                            if (selectedSlot.provider_id && apt.provider_id !== selectedSlot.provider_id) return false;
-                                            
-                                            // Check if appointment time is within slot time boundaries
-                                            const aptStart = new Date(apt.scheduled_start);
-                                            const aptEnd = new Date(apt.scheduled_end);
-                                            const slotDateStr = selectedSlot.slot_date;
-                                            const slotStart = new Date(`${slotDateStr}T${selectedSlot.start_time}`);
-                                            const slotEnd = new Date(`${slotDateStr}T${selectedSlot.end_time}`);
-                                            
-                                            // Appointment must fit within slot boundaries
-                                            return aptStart >= slotStart && aptEnd <= slotEnd;
-                                        })
-                                        .map(apt => {
-                                            const aptStart = new Date(apt.scheduled_start);
-                                            const aptEnd = new Date(apt.scheduled_end);
-                                            
-                                            return (
-                                                <div
-                                                    key={apt.appointment_id}
-                                                    onClick={() => setSelectedAppointment(apt)}
-                                                    style={{
-                                                        padding: '15px',
-                                                        border: `2px solid ${selectedAppointment?.appointment_id === apt.appointment_id ? '#28a745' : '#e9ecef'}`,
-                                                        borderRadius: '4px',
-                                                        marginBottom: '10px',
-                                                        cursor: 'pointer',
-                                                        background: selectedAppointment?.appointment_id === apt.appointment_id ? '#f0f9ff' : 'white',
-                                                        transition: 'all 0.2s ease'
-                                                    }}
-                                                    onMouseEnter={(e) => {
-                                                        if (selectedAppointment?.appointment_id !== apt.appointment_id) {
-                                                            e.currentTarget.style.borderColor = '#007bff';
-                                                        }
-                                                    }}
-                                                    onMouseLeave={(e) => {
-                                                        if (selectedAppointment?.appointment_id !== apt.appointment_id) {
-                                                            e.currentTarget.style.borderColor = '#e9ecef';
-                                                        }
-                                                    }}
-                                                >
-                                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
-                                                        <div>
-                                                            <strong style={{ color: '#333' }}>{apt.patient_name || 'Unknown Patient'}</strong>
-                                                            <p style={{ margin: '5px 0', fontSize: '13px', color: '#6c757d' }}>
-                                                                {aptStart.toLocaleDateString()} {aptStart.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })} - {aptEnd.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
-                                                            </p>
-                                                            <p style={{ margin: '5px 0', fontSize: '12px', color: '#6c757d' }}>
-                                                                Type: {apt.appointment_type?.replace('_', ' ').toUpperCase()}
-                                                            </p>
-                                                        </div>
-                                                        {selectedAppointment?.appointment_id === apt.appointment_id && (
-                                                            <CheckCircle size={20} color="#28a745" />
-                                                        )}
-                                                    </div>
-                                                </div>
-                                            );
-                                        })}
-                                </div>
-                            )}
-                        </div>
-
-                        {/* Action Buttons */}
-                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
-                            <button
-                                onClick={() => {
-                                    setShowAcceptModal(false);
-                                    setSelectedSlot(null);
-                                    setSelectedAppointment(null);
-                                }}
-                                style={{
-                                    padding: '8px 16px',
-                                    background: '#6c757d',
-                                    color: 'white',
-                                    border: 'none',
-                                    borderRadius: '4px',
-                                    cursor: 'pointer'
-                                }}
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                onClick={() => {
-                                    if (selectedAppointment) {
-                                        handleAcceptAppointment(selectedSlot.slot_id, selectedAppointment.appointment_id);
-                                    }
-                                }}
-                                disabled={!selectedAppointment || loading}
-                                style={{
-                                    padding: '8px 16px',
-                                    background: selectedAppointment && !loading ? '#28a745' : '#6c757d',
-                                    color: 'white',
-                                    border: 'none',
-                                    borderRadius: '4px',
-                                    cursor: selectedAppointment && !loading ? 'pointer' : 'not-allowed',
-                                    opacity: selectedAppointment && !loading ? 1 : 0.6
-                                }}
-                            >
-                                {loading ? 'Processing...' : 'Accept Appointment'}
-                            </button>
-                        </div>
                     </div>
                 </div>
             )}

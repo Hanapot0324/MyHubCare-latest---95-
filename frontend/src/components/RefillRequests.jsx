@@ -39,6 +39,8 @@ const RefillRequests = ({ socket }) => {
 
   const [declineReason, setDeclineReason] = useState('');
   const [approveNotes, setApproveNotes] = useState('');
+  const [approvedQuantity, setApprovedQuantity] = useState('');
+  const [readyForPickupDate, setReadyForPickupDate] = useState('');
 
   useEffect(() => {
     fetchRefillRequests();
@@ -125,7 +127,9 @@ const RefillRequests = ({ socket }) => {
         },
         body: JSON.stringify({
           user_id: user.user_id,
-          notes: approveNotes
+          review_notes: approveNotes,
+          approved_quantity: approvedQuantity ? parseInt(approvedQuantity) : selectedRequest.quantity,
+          ready_for_pickup_date: readyForPickupDate || selectedRequest.pickup_date
         }),
       });
 
@@ -139,6 +143,8 @@ const RefillRequests = ({ socket }) => {
         setShowApproveModal(false);
         setSelectedRequest(null);
         setApproveNotes('');
+        setApprovedQuantity('');
+        setReadyForPickupDate('');
         fetchRefillRequests();
       } else {
         throw new Error(data.message);
@@ -173,7 +179,8 @@ const RefillRequests = ({ socket }) => {
         },
         body: JSON.stringify({
           user_id: user.user_id,
-          reason: declineReason
+          decline_reason: declineReason,
+          review_notes: approveNotes // Optional review notes
         }),
       });
 
@@ -511,10 +518,91 @@ const RefillRequests = ({ socket }) => {
                   
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '15px', marginBottom: '10px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#495057' }}>
-                      <span>🔢 Remaining:</span>
-                      <strong>Not reported</strong>
+                      <span>🔢 Remaining Pills:</span>
+                      <strong>{request.remaining_pill_count !== null && request.remaining_pill_count !== undefined ? request.remaining_pill_count : 'Not reported'}</strong>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#495057' }}>
+                      <span>📊 Pill Status:</span>
+                      <strong style={{
+                        color: request.pill_status === 'kulang' ? '#dc3545' : 
+                               request.pill_status === 'sobra' ? '#ffc107' : '#28a745'
+                      }}>
+                        {request.pill_status ? request.pill_status.toUpperCase() : 'N/A'}
+                      </strong>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#495057' }}>
+                      <span>✅ Eligible:</span>
+                      <strong style={{ color: request.is_eligible_for_refill ? '#28a745' : '#dc3545' }}>
+                        {request.is_eligible_for_refill ? 'Yes' : 'No'}
+                      </strong>
                     </div>
                   </div>
+                  
+                  {request.kulang_explanation && (
+                    <div style={{ 
+                      padding: '10px', 
+                      backgroundColor: '#fff3cd', 
+                      borderRadius: '4px',
+                      marginBottom: '10px',
+                      border: '1px solid #ffc107'
+                    }}>
+                      <strong>Explanation:</strong> {request.kulang_explanation}
+                    </div>
+                  )}
+                  
+                  {request.approved_quantity && request.approved_quantity !== request.quantity && (
+                    <div style={{ 
+                      padding: '10px', 
+                      backgroundColor: '#d1ecf1', 
+                      borderRadius: '4px',
+                      marginBottom: '10px'
+                    }}>
+                      <strong>Approved Quantity:</strong> {request.approved_quantity} {request.unit || 'units'} 
+                      (Requested: {request.quantity} {request.unit || 'units'})
+                    </div>
+                  )}
+                  
+                  {request.ready_for_pickup_date && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#495057', marginBottom: '10px' }}>
+                      <span>📅 Ready for Pickup:</span>
+                      <strong>{new Date(request.ready_for_pickup_date).toLocaleDateString()}</strong>
+                    </div>
+                  )}
+                  
+                  {request.review_notes && (
+                    <div style={{ 
+                      padding: '10px', 
+                      backgroundColor: '#e7f3ff', 
+                      borderRadius: '4px',
+                      marginBottom: '10px'
+                    }}>
+                      <strong>Review Notes:</strong> {request.review_notes}
+                    </div>
+                  )}
+                  
+                  {request.decline_reason && (
+                    <div style={{ 
+                      padding: '10px', 
+                      backgroundColor: '#f8d7da', 
+                      borderRadius: '4px',
+                      marginBottom: '10px',
+                      border: '1px solid #dc3545'
+                    }}>
+                      <strong>Decline Reason:</strong> {request.decline_reason}
+                    </div>
+                  )}
+                  
+                  {request.dispensed_by && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#495057', marginBottom: '10px' }}>
+                      <span>💊 Dispensed by:</span>
+                      <strong>{request.dispensed_by_name || 'N/A'}</strong>
+                      {request.dispensed_at && (
+                        <span style={{ marginLeft: '10px' }}>
+                          on {new Date(request.dispensed_at).toLocaleString()}
+                        </span>
+                      )}
+                    </div>
+                  )}
                   
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '15px', marginBottom: '10px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#495057' }}>
@@ -602,19 +690,75 @@ const RefillRequests = ({ socket }) => {
                   <strong>Medication:</strong> {selectedRequest.medication_name} {selectedRequest.strength && `(${selectedRequest.strength})`}
                 </div>
                 <div style={{ marginBottom: '10px' }}>
-                  <strong>Quantity:</strong> {selectedRequest.quantity} {selectedRequest.form}s
+                  <strong>Quantity Requested:</strong> {selectedRequest.quantity} {selectedRequest.unit || selectedRequest.form || 'units'}
                 </div>
+                {selectedRequest.remaining_pill_count !== null && (
+                  <div style={{ marginBottom: '10px' }}>
+                    <strong>Remaining Pills:</strong> {selectedRequest.remaining_pill_count}
+                    {selectedRequest.is_eligible_for_refill && (
+                      <span style={{ color: '#28a745', marginLeft: '10px' }}>✅ Eligible</span>
+                    )}
+                  </div>
+                )}
                 <div style={{ marginBottom: '10px' }}>
-                  <strong>Pickup Date:</strong> {new Date(selectedRequest.pickup_date).toLocaleDateString()}
+                  <strong>Preferred Pickup Date:</strong> {new Date(selectedRequest.pickup_date).toLocaleDateString()}
+                  {selectedRequest.preferred_pickup_time && (
+                    <span> at {selectedRequest.preferred_pickup_time}</span>
+                  )}
                 </div>
                 <div>
                   <strong>Facility:</strong> {selectedRequest.facility_name}
                 </div>
               </div>
               
+              <div style={{ marginBottom: '15px' }}>
+                <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px', fontWeight: 500 }}>
+                  Approved Quantity (optional)
+                </label>
+                <input
+                  type="number"
+                  value={approvedQuantity}
+                  onChange={(e) => setApprovedQuantity(e.target.value)}
+                  placeholder={`Default: ${selectedRequest.quantity}`}
+                  min="1"
+                  style={{
+                    width: '100%',
+                    padding: '10px',
+                    border: '1px solid #ced4da',
+                    borderRadius: '4px',
+                    fontSize: '14px',
+                  }}
+                />
+                <small style={{ color: '#6c757d', fontSize: '12px' }}>
+                  Leave empty to approve requested quantity
+                </small>
+              </div>
+              
+              <div style={{ marginBottom: '15px' }}>
+                <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px', fontWeight: 500 }}>
+                  Ready for Pickup Date (optional)
+                </label>
+                <input
+                  type="date"
+                  value={readyForPickupDate}
+                  onChange={(e) => setReadyForPickupDate(e.target.value)}
+                  min={selectedRequest.pickup_date}
+                  style={{
+                    width: '100%',
+                    padding: '10px',
+                    border: '1px solid #ced4da',
+                    borderRadius: '4px',
+                    fontSize: '14px',
+                  }}
+                />
+                <small style={{ color: '#6c757d', fontSize: '12px' }}>
+                  Leave empty to use preferred pickup date
+                </small>
+              </div>
+              
               <div>
                 <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px', fontWeight: 500 }}>
-                  Notes (optional)
+                  Review Notes (optional)
                 </label>
                 <textarea
                   value={approveNotes}
@@ -735,21 +879,38 @@ const RefillRequests = ({ socket }) => {
                 <div style={{ marginBottom: '10px' }}>
                   <strong>Medication:</strong> {selectedRequest.medication_name} {selectedRequest.strength && `(${selectedRequest.strength})`}
                 </div>
-                <div style={{ marginBottom: '10px' }}>
-                  <strong>Quantity:</strong> {selectedRequest.quantity} {selectedRequest.form}s
-                </div>
-                <div style={{ marginBottom: '10px' }}>
-                  <strong>Pickup Date:</strong> {new Date(selectedRequest.pickup_date).toLocaleDateString()}
-                </div>
-                <div>
-                  <strong>Facility:</strong> {selectedRequest.facility_name}
-                </div>
-              </div>
-              
-              <div>
-                <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px', fontWeight: 500 }}>
-                  Reason for Decline <span style={{ color: '#dc3545' }}>*</span>
-                </label>
+                    <div style={{ marginBottom: '10px' }}>
+                      <strong>Quantity Requested:</strong> {selectedRequest.quantity} {selectedRequest.unit || selectedRequest.form || 'units'}
+                    </div>
+                    {selectedRequest.remaining_pill_count !== null && (
+                      <div style={{ marginBottom: '10px' }}>
+                        <strong>Remaining Pills:</strong> {selectedRequest.remaining_pill_count}
+                        {selectedRequest.pill_status && (
+                          <span style={{ 
+                            color: selectedRequest.pill_status === 'kulang' ? '#dc3545' : 
+                                   selectedRequest.pill_status === 'sobra' ? '#ffc107' : '#28a745',
+                            marginLeft: '10px'
+                          }}>
+                            ({selectedRequest.pill_status.toUpperCase()})
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    <div style={{ marginBottom: '10px' }}>
+                      <strong>Preferred Pickup Date:</strong> {new Date(selectedRequest.pickup_date).toLocaleDateString()}
+                      {selectedRequest.preferred_pickup_time && (
+                        <span> at {selectedRequest.preferred_pickup_time}</span>
+                      )}
+                    </div>
+                    <div>
+                      <strong>Facility:</strong> {selectedRequest.facility_name}
+                    </div>
+                  </div>
+                  
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px', fontWeight: 500 }}>
+                      Reason for Decline <span style={{ color: '#dc3545' }}>*</span>
+                    </label>
                 <textarea
                   value={declineReason}
                   onChange={(e) => setDeclineReason(e.target.value)}

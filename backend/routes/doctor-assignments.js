@@ -14,58 +14,39 @@ export const setSocketIO = (socketIO) => {
   io = socketIO;
 };
 
-// Helper function to generate availability slots from assignment
+// Helper function to generate availability slots from assignment (per-day model)
 async function generateSlotsFromAssignment(assignment) {
   const slots = [];
-  const startDate = new Date(assignment.start_date);
-  const endDate = new Date(assignment.end_date);
-  const daysOfWeek = assignment.days_of_week.split(',');
+  const assignmentDate = new Date(assignment.assignment_date);
+  const slotDate = assignmentDate.toISOString().split('T')[0];
 
-  // Map day names to numbers (0 = Sunday, 1 = Monday, etc.)
-  const dayMap = {
-    'sun': 0, 'mon': 1, 'tue': 2, 'wed': 3, 'thu': 4, 'fri': 5, 'sat': 6
-  };
-
-  const enabledDays = daysOfWeek.map(day => dayMap[day.trim()]);
-
-  // Generate slots for each day in the date range
-  for (let date = new Date(startDate); date <= endDate; date.setDate(date.getDate() + 1)) {
-    const dayOfWeek = date.getDay();
+  // Generate hourly slots from start_time to end_time
+  const [startHour, startMin] = assignment.start_time.split(':').map(Number);
+  const [endHour, endMin] = assignment.end_time.split(':').map(Number);
+  
+  // Generate hourly slots
+  for (let hour = startHour; hour < endHour; hour++) {
+    const slot_id = uuidv4();
+    const startTime = `${String(hour).padStart(2, '0')}:00:00`;
+    const endTime = `${String(hour + 1).padStart(2, '0')}:00:00`;
     
-    // Skip if this day is not in the enabled days
-    if (!enabledDays.includes(dayOfWeek)) {
-      continue;
-    }
+    // Determine slot status based on assignment lock status
+    const slotStatus = assignment.is_locked ? 'locked' : 'available';
+    const lockStatus = assignment.is_locked ? true : false;
 
-    // Generate hourly slots from daily_start to daily_end
-    const [startHour, startMin] = assignment.daily_start.split(':').map(Number);
-    const [endHour, endMin] = assignment.daily_end.split(':').map(Number);
-    
-    const slotDate = date.toISOString().split('T')[0];
-    
-    // Generate hourly slots
-    for (let hour = startHour; hour < endHour; hour++) {
-      const slot_id = uuidv4();
-      const startTime = `${String(hour).padStart(2, '0')}:00:00`;
-      const endTime = `${String(hour + 1).padStart(2, '0')}:00:00`;
-      
-      // Determine slot status based on assignment lock status
-      const slotStatus = assignment.is_locked ? 'locked' : 'available';
-      const lockStatus = assignment.is_locked ? true : false;
-
-      slots.push({
-        slot_id,
-        provider_id: assignment.provider_id,
-        facility_id: assignment.facility_id,
-        slot_date: slotDate,
-        start_time: startTime,
-        end_time: endTime,
-        slot_status: slotStatus,
-        appointment_id: null,
-        assignment_id: assignment.assignment_id,
-        lock_status: lockStatus
-      });
-    }
+    slots.push({
+      slot_id,
+      provider_id: assignment.doctor_id, // Use doctor_id as provider_id for slots
+      doctor_id: assignment.doctor_id,
+      facility_id: assignment.facility_id,
+      slot_date: slotDate,
+      start_time: startTime,
+      end_time: endTime,
+      slot_status: slotStatus,
+      appointment_id: null,
+      assignment_id: assignment.assignment_id,
+      lock_status: lockStatus
+    });
   }
 
   // Insert all slots in batch using parameterized queries
@@ -74,10 +55,11 @@ async function generateSlotsFromAssignment(assignment) {
     const batchSize = 100;
     for (let i = 0; i < slots.length; i += batchSize) {
       const batch = slots.slice(i, i + batchSize);
-      const placeholders = batch.map(() => '(?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)').join(',');
+      const placeholders = batch.map(() => '(?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)').join(',');
       const values = batch.flatMap(slot => [
         slot.slot_id,
         slot.provider_id,
+        slot.doctor_id,
         slot.facility_id,
         slot.slot_date,
         slot.start_time,
@@ -89,7 +71,7 @@ async function generateSlotsFromAssignment(assignment) {
 
       await db.query(`
         INSERT INTO availability_slots (
-          slot_id, provider_id, facility_id, slot_date, start_time, end_time, 
+          slot_id, provider_id, doctor_id, facility_id, slot_date, start_time, end_time, 
           slot_status, appointment_id, assignment_id, lock_status
         ) VALUES ${placeholders}
       `, values);
@@ -99,13 +81,15 @@ async function generateSlotsFromAssignment(assignment) {
   return slots.length;
 }
 
-// Helper function to apply conflicts to slots
-async function applyConflictsToSlots(assignment_id) {
-  // Get all conflicts for this assignment
+// Helper function to apply conflicts to slots (standalone conflicts model)
+async function applyConflictsToSlots(doctor_id, facility_id, assignment_date) {
+  // Get all conflicts for this doctor on this date
   const [conflicts] = await db.query(`
     SELECT * FROM doctor_conflicts 
-    WHERE assignment_id = ?
-  `, [assignment_id]);
+    WHERE doctor_id = ?
+      AND conflict_date = ?
+      AND (facility_id IS NULL OR facility_id = ?)
+  `, [doctor_id, assignment_date, facility_id]);
 
   if (conflicts.length === 0) {
     return;
@@ -113,27 +97,39 @@ async function applyConflictsToSlots(assignment_id) {
 
   // For each conflict, mark overlapping slots as blocked
   for (const conflict of conflicts) {
-    const conflictStart = new Date(conflict.conflict_start);
-    const conflictEnd = new Date(conflict.conflict_end);
-    const conflictDate = conflictStart.toISOString().split('T')[0];
-    const conflictStartTime = conflictStart.toTimeString().slice(0, 8);
-    const conflictEndTime = conflictEnd.toTimeString().slice(0, 8);
-
-    await db.query(`
-      UPDATE availability_slots
-      SET slot_status = 'blocked'
-      WHERE assignment_id = ?
-        AND slot_date = ?
-        AND (
-          (start_time < ? AND end_time > ?) OR
-          (start_time >= ? AND end_time <= ?)
-        )
-    `, [
-      assignment_id,
-      conflictDate,
-      conflictEndTime, conflictStartTime,
-      conflictStartTime, conflictEndTime
-    ]);
+    if (conflict.is_all_day) {
+      // Block all slots for this day
+      await db.query(`
+        UPDATE availability_slots
+        SET slot_status = 'blocked'
+        WHERE doctor_id = ?
+          AND facility_id = ?
+          AND slot_date = ?
+          AND assignment_id IS NOT NULL
+      `, [doctor_id, facility_id, assignment_date]);
+    } else {
+      // Block only overlapping time slots
+      await db.query(`
+        UPDATE availability_slots
+        SET slot_status = 'blocked'
+        WHERE doctor_id = ?
+          AND facility_id = ?
+          AND slot_date = ?
+          AND assignment_id IS NOT NULL
+          AND (
+            (start_time < ? AND end_time > ?) OR
+            (start_time >= ? AND end_time <= ?)
+          )
+      `, [
+        doctor_id,
+        facility_id,
+        assignment_date,
+        conflict.end_time || '23:59:59',
+        conflict.start_time || '00:00:00',
+        conflict.start_time || '00:00:00',
+        conflict.end_time || '23:59:59'
+      ]);
+    }
   }
 }
 
@@ -143,21 +139,21 @@ router.get('/providers', authenticateToken, async (req, res) => {
   try {
     const { facility_id } = req.query;
 
-    console.log('Fetching providers from doctor assignments, facility_id:', facility_id);
+    console.log('🔍 Fetching providers from doctor assignments, facility_id:', facility_id);
 
+    // First, try to get providers from active doctor assignments
     let query = `
       SELECT DISTINCT
-        da.provider_id,
+        da.doctor_id AS provider_id,
         u.full_name AS provider_name,
         u.user_id,
         f.facility_id,
         f.facility_name
       FROM doctor_assignments da
-      LEFT JOIN users u ON da.provider_id = u.user_id
+      INNER JOIN users u ON da.doctor_id = u.user_id
       LEFT JOIN facilities f ON da.facility_id = f.facility_id
       WHERE u.role = 'physician' AND u.status = 'active'
-        AND da.start_date <= CURDATE()
-        AND da.end_date >= CURDATE()
+        AND da.assignment_date >= CURDATE()
     `;
 
     const params = [];
@@ -169,19 +165,56 @@ router.get('/providers', authenticateToken, async (req, res) => {
 
     query += ' ORDER BY u.full_name ASC';
 
-    console.log('Provider query:', query);
-    console.log('Provider params:', params);
+    console.log('📋 Provider query:', query);
+    console.log('📋 Provider params:', params);
 
     const [providers] = await db.query(query, params);
 
-    console.log('Found providers:', providers.length);
+    console.log('✅ Found providers from assignments:', providers.length);
+
+    // If no providers found from assignments, fallback to all active physicians
+    if (providers.length === 0) {
+      console.log('⚠️ No providers found from assignments, falling back to all active physicians...');
+      
+      let fallbackQuery = `
+        SELECT DISTINCT
+          u.user_id AS provider_id,
+          u.full_name AS provider_name,
+          u.user_id,
+          f.facility_id,
+          f.facility_name
+        FROM users u
+        LEFT JOIN facilities f ON u.facility_id = f.facility_id
+        WHERE u.role = 'physician' AND u.status = 'active'
+      `;
+
+      const fallbackParams = [];
+
+      if (facility_id) {
+        fallbackQuery += ' AND u.facility_id = ?';
+        fallbackParams.push(facility_id);
+      }
+
+      fallbackQuery += ' ORDER BY u.full_name ASC';
+
+      console.log('📋 Fallback query:', fallbackQuery);
+      console.log('📋 Fallback params:', fallbackParams);
+
+      const [fallbackProviders] = await db.query(fallbackQuery, fallbackParams);
+      console.log('✅ Found providers from fallback:', fallbackProviders.length);
+
+      return res.json({
+        success: true,
+        providers: fallbackProviders
+      });
+    }
 
     res.json({
       success: true,
       providers: providers
     });
   } catch (error) {
-    console.error('Error fetching providers from doctor assignments:', error);
+    console.error('❌ Error fetching providers from doctor assignments:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch providers',
@@ -201,24 +234,28 @@ router.get('/', authenticateToken, async (req, res) => {
       });
     }
 
-    const { provider_id, facility_id, is_locked } = req.query;
+    const { doctor_id, facility_id, is_locked, assignment_date } = req.query;
 
     let query = `
       SELECT 
         da.*,
-        u.full_name AS provider_name,
-        f.facility_name
+        u.full_name AS doctor_name,
+        f.facility_name,
+        locked_by_user.full_name AS locked_by_name,
+        created_by_user.full_name AS created_by_name
       FROM doctor_assignments da
-      LEFT JOIN users u ON da.provider_id = u.user_id
+      LEFT JOIN users u ON da.doctor_id = u.user_id
       LEFT JOIN facilities f ON da.facility_id = f.facility_id
+      LEFT JOIN users locked_by_user ON da.locked_by = locked_by_user.user_id
+      LEFT JOIN users created_by_user ON da.created_by = created_by_user.user_id
       WHERE 1=1
     `;
 
     const params = [];
 
-    if (provider_id) {
-      query += ' AND da.provider_id = ?';
-      params.push(provider_id);
+    if (doctor_id) {
+      query += ' AND da.doctor_id = ?';
+      params.push(doctor_id);
     }
 
     if (facility_id) {
@@ -231,7 +268,12 @@ router.get('/', authenticateToken, async (req, res) => {
       params.push(is_locked === 'true' || is_locked === true);
     }
 
-    query += ' ORDER BY da.start_date DESC, da.created_at DESC';
+    if (assignment_date) {
+      query += ' AND da.assignment_date = ?';
+      params.push(assignment_date);
+    }
+
+    query += ' ORDER BY da.assignment_date DESC, da.created_at DESC';
 
     const [assignments] = await db.query(query, params);
 
@@ -264,11 +306,15 @@ router.get('/:id', authenticateToken, async (req, res) => {
     const [assignments] = await db.query(`
       SELECT 
         da.*,
-        u.full_name AS provider_name,
-        f.facility_name
+        u.full_name AS doctor_name,
+        f.facility_name,
+        locked_by_user.full_name AS locked_by_name,
+        created_by_user.full_name AS created_by_name
       FROM doctor_assignments da
-      LEFT JOIN users u ON da.provider_id = u.user_id
+      LEFT JOIN users u ON da.doctor_id = u.user_id
       LEFT JOIN facilities f ON da.facility_id = f.facility_id
+      LEFT JOIN users locked_by_user ON da.locked_by = locked_by_user.user_id
+      LEFT JOIN users created_by_user ON da.created_by = created_by_user.user_id
       WHERE da.assignment_id = ?
     `, [id]);
 
@@ -279,16 +325,20 @@ router.get('/:id', authenticateToken, async (req, res) => {
       });
     }
 
-    // Get conflicts for this assignment
+    const assignment = assignments[0];
+
+    // Get conflicts for this doctor on this date
     const [conflicts] = await db.query(`
       SELECT 
         dc.*,
         u.full_name AS created_by_name
       FROM doctor_conflicts dc
       LEFT JOIN users u ON dc.created_by = u.user_id
-      WHERE dc.assignment_id = ?
-      ORDER BY dc.conflict_start ASC
-    `, [id]);
+      WHERE dc.doctor_id = ?
+        AND dc.conflict_date = ?
+        AND (dc.facility_id IS NULL OR dc.facility_id = ?)
+      ORDER BY dc.conflict_date ASC, dc.start_time ASC
+    `, [assignment.doctor_id, assignment.assignment_date, assignment.facility_id]);
 
     res.json({
       success: true,
@@ -307,7 +357,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// POST /api/doctor-assignments - Create new doctor assignment
+// POST /api/doctor-assignments - Create new doctor assignment (per-day model)
 router.post('/', authenticateToken, async (req, res) => {
   try {
     // Only admins can create assignments
@@ -319,30 +369,30 @@ router.post('/', authenticateToken, async (req, res) => {
     }
 
     const {
-      provider_id,
+      doctor_id,
       facility_id,
-      start_date,
-      end_date,
-      daily_start,
-      daily_end,
-      days_of_week,
+      assignment_date,
+      start_time,
+      end_time,
+      max_patients = 8,
+      notes,
       is_locked = false
     } = req.body;
 
     // Validation
-    if (!provider_id || !facility_id || !start_date || !end_date || !daily_start || !daily_end || !days_of_week) {
+    if (!doctor_id || !facility_id || !assignment_date || !start_time || !end_time) {
       return res.status(400).json({
         success: false,
-        message: 'Missing required fields: provider_id, facility_id, start_date, end_date, daily_start, daily_end, days_of_week'
+        message: 'Missing required fields: doctor_id, facility_id, assignment_date, start_time, end_time'
       });
     }
 
-    // Validate provider exists
-    const [providers] = await db.query('SELECT user_id FROM users WHERE user_id = ? AND role = "physician"', [provider_id]);
-    if (providers.length === 0) {
+    // Validate doctor exists and is a physician
+    const [doctors] = await db.query('SELECT user_id FROM users WHERE user_id = ? AND role = "physician"', [doctor_id]);
+    if (doctors.length === 0) {
       return res.status(404).json({
         success: false,
-        message: 'Provider not found or is not a physician'
+        message: 'Doctor not found or is not a physician'
       });
     }
 
@@ -355,23 +405,37 @@ router.post('/', authenticateToken, async (req, res) => {
       });
     }
 
-    // Validate dates
-    const start = new Date(start_date);
-    const end = new Date(end_date);
-    if (start >= end) {
+    // Validate date is not in the past
+    const assignmentDate = new Date(assignment_date);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (assignmentDate < today) {
       return res.status(400).json({
         success: false,
-        message: 'start_date must be before end_date'
+        message: 'Assignment date cannot be in the past'
       });
     }
 
-    // Validate days_of_week format
-    const validDays = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
-    const days = days_of_week.split(',').map(d => d.trim());
-    if (!days.every(d => validDays.includes(d))) {
+    // Validate time format
+    const startTime = new Date(`2000-01-01 ${start_time}`);
+    const endTime = new Date(`2000-01-01 ${end_time}`);
+    if (startTime >= endTime) {
       return res.status(400).json({
         success: false,
-        message: `days_of_week must be comma-separated values from: ${validDays.join(', ')}`
+        message: 'start_time must be before end_time'
+      });
+    }
+
+    // Check for existing assignment (unique constraint)
+    const [existing] = await db.query(`
+      SELECT assignment_id FROM doctor_assignments 
+      WHERE doctor_id = ? AND assignment_date = ?
+    `, [doctor_id, assignment_date]);
+    
+    if (existing.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'An assignment already exists for this doctor on this date'
       });
     }
 
@@ -385,36 +449,35 @@ router.post('/', authenticateToken, async (req, res) => {
       await db.query(`
         INSERT INTO doctor_assignments (
           assignment_id,
-          provider_id,
+          doctor_id,
           facility_id,
-          start_date,
-          end_date,
-          daily_start,
-          daily_end,
-          days_of_week,
+          assignment_date,
+          start_time,
+          end_time,
+          max_patients,
+          notes,
           is_locked,
           created_by,
-          created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
-      `, [assignment_id, provider_id, facility_id, start_date, end_date, daily_start, daily_end, days_of_week, is_locked, req.user.user_id]);
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+      `, [assignment_id, doctor_id, facility_id, assignment_date, start_time, end_time, max_patients, notes || null, is_locked, req.user.user_id]);
 
       // Generate availability slots automatically
       const assignment = {
         assignment_id,
-        provider_id,
+        doctor_id,
         facility_id,
-        start_date,
-        end_date,
-        daily_start,
-        daily_end,
-        days_of_week,
+        assignment_date,
+        start_time,
+        end_time,
         is_locked
       };
 
       const slotsGenerated = await generateSlotsFromAssignment(assignment);
 
-      // Apply conflicts if any exist (though there won't be any for a new assignment)
-      await applyConflictsToSlots(assignment_id);
+      // Apply conflicts if any exist
+      await applyConflictsToSlots(doctor_id, facility_id, assignment_date);
 
       await db.query('COMMIT');
     } catch (error) {
@@ -426,11 +489,13 @@ router.post('/', authenticateToken, async (req, res) => {
     const [created] = await db.query(`
       SELECT 
         da.*,
-        u.full_name AS provider_name,
-        f.facility_name
+        u.full_name AS doctor_name,
+        f.facility_name,
+        created_by_user.full_name AS created_by_name
       FROM doctor_assignments da
-      LEFT JOIN users u ON da.provider_id = u.user_id
+      LEFT JOIN users u ON da.doctor_id = u.user_id
       LEFT JOIN facilities f ON da.facility_id = f.facility_id
+      LEFT JOIN users created_by_user ON da.created_by = created_by_user.user_id
       WHERE da.assignment_id = ?
     `, [assignment_id]);
 
@@ -473,11 +538,10 @@ router.put('/:id', authenticateToken, async (req, res) => {
 
     const { id } = req.params;
     const {
-      start_date,
-      end_date,
-      daily_start,
-      daily_end,
-      days_of_week,
+      start_time,
+      end_time,
+      max_patients,
+      notes,
       is_locked
     } = req.body;
 
@@ -492,33 +556,47 @@ router.put('/:id', authenticateToken, async (req, res) => {
 
     const oldData = existing[0];
 
+    // Check if assignment is locked (only admin can unlock)
+    if (oldData.is_locked && !is_locked && req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Cannot modify locked assignment. Only admin can unlock.'
+      });
+    }
+
     // Build update query
     const updates = [];
     const params = [];
 
-    if (start_date !== undefined) {
-      updates.push('start_date = ?');
-      params.push(start_date);
+    if (start_time !== undefined) {
+      updates.push('start_time = ?');
+      params.push(start_time);
     }
-    if (end_date !== undefined) {
-      updates.push('end_date = ?');
-      params.push(end_date);
+    if (end_time !== undefined) {
+      updates.push('end_time = ?');
+      params.push(end_time);
     }
-    if (daily_start !== undefined) {
-      updates.push('daily_start = ?');
-      params.push(daily_start);
+    if (max_patients !== undefined) {
+      updates.push('max_patients = ?');
+      params.push(max_patients);
     }
-    if (daily_end !== undefined) {
-      updates.push('daily_end = ?');
-      params.push(daily_end);
-    }
-    if (days_of_week !== undefined) {
-      updates.push('days_of_week = ?');
-      params.push(days_of_week);
+    if (notes !== undefined) {
+      updates.push('notes = ?');
+      params.push(notes);
     }
     if (is_locked !== undefined) {
       updates.push('is_locked = ?');
       params.push(is_locked);
+      if (is_locked && !oldData.is_locked) {
+        // Locking assignment
+        updates.push('locked_at = NOW()');
+        updates.push('locked_by = ?');
+        params.push(req.user.user_id);
+      } else if (!is_locked && oldData.is_locked) {
+        // Unlocking assignment
+        updates.push('locked_at = NULL');
+        updates.push('locked_by = NULL');
+      }
     }
 
     if (updates.length === 0) {
@@ -528,6 +606,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
       });
     }
 
+    updates.push('updated_at = NOW()');
     params.push(id);
 
     // Start transaction
@@ -542,8 +621,8 @@ router.put('/:id', authenticateToken, async (req, res) => {
       `, params);
 
       // If schedule changed, regenerate slots
-      if (start_date || end_date || daily_start || daily_end || days_of_week || is_locked !== undefined) {
-        // Delete existing slots for this assignment
+      if (start_time || end_time || is_locked !== undefined) {
+        // Delete existing slots for this assignment (only unbooked ones)
         await db.query(`
           DELETE FROM availability_slots
           WHERE assignment_id = ? AND appointment_id IS NULL
@@ -552,16 +631,13 @@ router.put('/:id', authenticateToken, async (req, res) => {
         // Regenerate slots
         const updatedAssignment = {
           ...oldData,
-          ...(start_date && { start_date }),
-          ...(end_date && { end_date }),
-          ...(daily_start && { daily_start }),
-          ...(daily_end && { daily_end }),
-          ...(days_of_week && { days_of_week }),
+          ...(start_time && { start_time }),
+          ...(end_time && { end_time }),
           ...(is_locked !== undefined && { is_locked })
         };
 
         await generateSlotsFromAssignment(updatedAssignment);
-        await applyConflictsToSlots(id);
+        await applyConflictsToSlots(oldData.doctor_id, oldData.facility_id, oldData.assignment_date);
       }
 
       await db.query('COMMIT');
@@ -574,11 +650,15 @@ router.put('/:id', authenticateToken, async (req, res) => {
     const [updated] = await db.query(`
       SELECT 
         da.*,
-        u.full_name AS provider_name,
-        f.facility_name
+        u.full_name AS doctor_name,
+        f.facility_name,
+        locked_by_user.full_name AS locked_by_name,
+        created_by_user.full_name AS created_by_name
       FROM doctor_assignments da
-      LEFT JOIN users u ON da.provider_id = u.user_id
+      LEFT JOIN users u ON da.doctor_id = u.user_id
       LEFT JOIN facilities f ON da.facility_id = f.facility_id
+      LEFT JOIN users locked_by_user ON da.locked_by = locked_by_user.user_id
+      LEFT JOIN users created_by_user ON da.created_by = created_by_user.user_id
       WHERE da.assignment_id = ?
     `, [id]);
 
@@ -630,13 +710,18 @@ router.delete('/:id', authenticateToken, async (req, res) => {
       });
     }
 
+    // Check if assignment is locked
+    if (existing[0].is_locked) {
+      return res.status(403).json({
+        success: false,
+        message: 'Cannot delete locked assignment. Unlock it first.'
+      });
+    }
+
     // Start transaction
     await db.query('START TRANSACTION');
 
     try {
-      // Delete conflicts first
-      await db.query('DELETE FROM doctor_conflicts WHERE assignment_id = ?', [id]);
-
       // Delete slots that aren't booked
       await db.query(`
         DELETE FROM availability_slots
@@ -678,32 +763,58 @@ router.delete('/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// POST /api/doctor-assignments/:id/conflicts - Add conflict to assignment
-router.post('/:id/conflicts', authenticateToken, async (req, res) => {
+// POST /api/doctor-conflicts - Create standalone conflict (not tied to assignment)
+router.post('/conflicts', authenticateToken, async (req, res) => {
   try {
     if (req.user.role !== 'admin') {
       return res.status(403).json({
         success: false,
-        message: 'Access denied'
+        message: 'Access denied. Only administrators can create conflicts.'
       });
     }
 
-    const { id } = req.params;
-    const { conflict_start, conflict_end, reason } = req.body;
+    const {
+      doctor_id,
+      facility_id,
+      conflict_date,
+      conflict_type,
+      reason,
+      start_time,
+      end_time,
+      is_all_day = true
+    } = req.body;
 
-    if (!conflict_start || !conflict_end) {
+    // Validation
+    if (!doctor_id || !conflict_date || !conflict_type || !reason) {
       return res.status(400).json({
         success: false,
-        message: 'conflict_start and conflict_end are required'
+        message: 'Missing required fields: doctor_id, conflict_date, conflict_type, reason'
       });
     }
 
-    // Check if assignment exists
-    const [assignments] = await db.query('SELECT * FROM doctor_assignments WHERE assignment_id = ?', [id]);
-    if (assignments.length === 0) {
+    // Validate doctor exists
+    const [doctors] = await db.query('SELECT user_id FROM users WHERE user_id = ? AND role = "physician"', [doctor_id]);
+    if (doctors.length === 0) {
       return res.status(404).json({
         success: false,
-        message: 'Doctor assignment not found'
+        message: 'Doctor not found or is not a physician'
+      });
+    }
+
+    // Validate conflict_type
+    const validTypes = ['leave', 'meeting', 'training', 'emergency', 'other'];
+    if (!validTypes.includes(conflict_type)) {
+      return res.status(400).json({
+        success: false,
+        message: `conflict_type must be one of: ${validTypes.join(', ')}`
+      });
+    }
+
+    // Validate partial day conflicts have times
+    if (!is_all_day && (!start_time || !end_time)) {
+      return res.status(400).json({
+        success: false,
+        message: 'start_time and end_time are required for partial day conflicts'
       });
     }
 
@@ -712,25 +823,44 @@ router.post('/:id/conflicts', authenticateToken, async (req, res) => {
     await db.query(`
       INSERT INTO doctor_conflicts (
         conflict_id,
-        assignment_id,
-        conflict_start,
-        conflict_end,
+        doctor_id,
+        facility_id,
+        conflict_date,
+        conflict_type,
         reason,
+        start_time,
+        end_time,
+        is_all_day,
         created_by,
         created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, NOW())
-    `, [conflict_id, id, conflict_start, conflict_end, reason || null, req.user.user_id]);
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+    `, [
+      conflict_id,
+      doctor_id,
+      facility_id || null,
+      conflict_date,
+      conflict_type,
+      reason,
+      start_time || null,
+      end_time || null,
+      is_all_day ? 1 : 0,
+      req.user.user_id
+    ]);
 
-    // Apply conflict to slots
-    await applyConflictsToSlots(id);
+    // Apply conflict to all affected slots
+    await applyConflictsToSlots(doctor_id, facility_id, conflict_date);
 
     // Fetch created conflict
     const [created] = await db.query(`
       SELECT 
         dc.*,
-        u.full_name AS created_by_name
+        u.full_name AS doctor_name,
+        f.facility_name,
+        created_by_user.full_name AS created_by_name
       FROM doctor_conflicts dc
-      LEFT JOIN users u ON dc.created_by = u.user_id
+      LEFT JOIN users u ON dc.doctor_id = u.user_id
+      LEFT JOIN facilities f ON dc.facility_id = f.facility_id
+      LEFT JOIN users created_by_user ON dc.created_by = created_by_user.user_id
       WHERE dc.conflict_id = ?
     `, [conflict_id]);
 
@@ -761,8 +891,8 @@ router.post('/:id/conflicts', authenticateToken, async (req, res) => {
   }
 });
 
-// DELETE /api/doctor-assignments/:id/conflicts/:conflictId - Remove conflict
-router.delete('/:id/conflicts/:conflictId', authenticateToken, async (req, res) => {
+// DELETE /api/doctor-conflicts/:conflictId - Remove conflict
+router.delete('/conflicts/:conflictId', authenticateToken, async (req, res) => {
   try {
     if (req.user.role !== 'admin') {
       return res.status(403).json({
@@ -787,7 +917,19 @@ router.delete('/:id/conflicts/:conflictId', authenticateToken, async (req, res) 
     await db.query('DELETE FROM doctor_conflicts WHERE conflict_id = ?', [conflictId]);
 
     // Reapply conflicts to slots (to unblock slots that were only blocked by this conflict)
-    await applyConflictsToSlots(conflict.assignment_id);
+    // First, unblock all slots for this doctor/date/facility
+    await db.query(`
+      UPDATE availability_slots
+      SET slot_status = 'available'
+      WHERE doctor_id = ?
+        AND slot_date = ?
+        AND (facility_id = ? OR ? IS NULL)
+        AND slot_status = 'blocked'
+        AND assignment_id IS NOT NULL
+    `, [conflict.doctor_id, conflict.conflict_date, conflict.facility_id, conflict.facility_id]);
+
+    // Then reapply remaining conflicts
+    await applyConflictsToSlots(conflict.doctor_id, conflict.facility_id, conflict.conflict_date);
 
     // Log audit
     const userInfo = await getUserInfoForAudit(req.user.user_id);

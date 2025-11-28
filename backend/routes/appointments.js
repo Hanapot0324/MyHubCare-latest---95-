@@ -76,6 +76,7 @@ router.get('/', authenticateToken, async (req, res) => {
     if (req.user.role === 'patient') {
       // Patients only see their own appointments
       // Get patient_id from user's linked patient record
+      console.log('🔍 Patient role detected, looking up patient_id for user:', req.user.user_id);
       const [patientRows] = await db.query(`
         SELECT patient_id FROM patients 
         WHERE created_by = ? OR email IN (SELECT email FROM users WHERE user_id = ?)
@@ -83,9 +84,24 @@ router.get('/', authenticateToken, async (req, res) => {
       `, [req.user.user_id, req.user.user_id]);
       
       if (patientRows.length > 0) {
+        const patientId = patientRows[0].patient_id;
+        console.log('✅ Found patient_id:', patientId);
+        
+        // Debug: Check if appointments exist for this patient
+        const [apptCheck] = await db.query(
+          'SELECT COUNT(*) as count, patient_id FROM appointments WHERE patient_id = ? GROUP BY patient_id',
+          [patientId]
+        );
+        console.log('📊 Appointments check for patient:', {
+          patient_id: patientId,
+          appointment_count: apptCheck[0]?.count || 0,
+          all_appointments_in_db: apptCheck.length > 0 ? apptCheck[0] : 'none'
+        });
+        
         query += ' AND a.patient_id = ?';
-        params.push(patientRows[0].patient_id);
+        params.push(patientId);
       } else {
+        console.log('❌ No patient record found for user:', req.user.user_id);
         // If no patient record found, return empty results
         query += ' AND 1=0';
       }
@@ -143,7 +159,7 @@ router.get('/', authenticateToken, async (req, res) => {
       params.push(date_to);
     }
 
-    query += ' ORDER BY a.scheduled_start ASC';
+    query += ' ORDER BY a.scheduled_start DESC'; // Module 6: newest on top, oldest at bottom
 
     console.log('Executing query:', query);
     console.log('Query params:', params);
@@ -281,7 +297,7 @@ router.get('/date/:date', authenticateToken, async (req, res) => {
       }
     }
 
-    query += ' ORDER BY a.scheduled_start ASC';
+    query += ' ORDER BY a.scheduled_start DESC'; // Module 6: newest on top, oldest at bottom
 
     const [appointments] = await db.query(query, params);
 
@@ -381,23 +397,23 @@ export async function checkAvailabilityForRequest(facility_id, provider_id, sche
     // Check for doctor conflicts (if provider_id is specified)
     let doctorConflicts = [];
     if (provider_id) {
+      // Check for conflicts on the requested date
+      const conflictDate = slotDate;
       const [conflictSlots] = await db.query(`
         SELECT dc.*
         FROM doctor_conflicts dc
-        INNER JOIN doctor_assignments da ON dc.assignment_id = da.assignment_id
-        WHERE da.provider_id = ?
-          AND da.facility_id = ?
+        WHERE dc.doctor_id = ?
+          AND dc.conflict_date = ?
           AND (
-            (dc.conflict_start < ? AND dc.conflict_end > ?) OR
-            (dc.conflict_start < ? AND dc.conflict_end > ?) OR
-            (dc.conflict_start >= ? AND dc.conflict_end <= ?)
+            dc.is_all_day = TRUE OR
+            (dc.start_time IS NULL AND dc.end_time IS NULL) OR
+            (dc.start_time <= ? AND dc.end_time >= ?)
           )
       `, [
         provider_id,
-        facility_id,
-        scheduled_end, scheduled_start,
-        scheduled_start, scheduled_end,
-        scheduled_start, scheduled_end
+        conflictDate,
+        endTime,
+        startTime
       ]);
       doctorConflicts = conflictSlots;
     }
@@ -429,7 +445,7 @@ export async function checkAvailabilityForRequest(facility_id, provider_id, sche
       SELECT COUNT(*) as count
       FROM doctor_assignments
       WHERE facility_id = ?
-        ${provider_id ? 'AND provider_id = ?' : ''}
+        ${provider_id ? 'AND doctor_id = ?' : ''}
     `, provider_id ? [facility_id, provider_id] : [facility_id]);
 
     const hasAssignments = assignmentCheck[0].count > 0;
@@ -604,15 +620,17 @@ router.post('/', authenticateToken, async (req, res) => {
       });
     }
 
-    // Validate date is not in the past - allow same-day booking
+    // Validate date is not in the past or today (no same-day booking per Module 6 spec)
     const startDate = new Date(scheduled_start);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+    const startDateOnly = new Date(startDate);
+    startDateOnly.setHours(0, 0, 0, 0);
 
-    if (startDate < today) {
+    if (startDateOnly <= today) {
       return res.status(400).json({
         success: false,
-        message: 'Appointments cannot be scheduled in the past'
+        message: 'Appointments must be scheduled at least one day in advance (no same-day booking)'
       });
     }
 
@@ -624,8 +642,14 @@ router.post('/', authenticateToken, async (req, res) => {
       });
     }
 
-    // Set default duration to 60 minutes if not provided
-    const finalDurationMinutes = duration_minutes || 60;
+    // Enforce 60-minute duration (Module 6 spec requirement)
+    const finalDurationMinutes = 60;
+    if (duration_minutes && duration_minutes !== 60) {
+      return res.status(400).json({
+        success: false,
+        message: 'Appointment duration must be exactly 60 minutes'
+      });
+    }
 
     // Check if patient exists
     const [patients] = await db.query('SELECT patient_id FROM patients WHERE patient_id = ?', [finalPatientId]);
@@ -989,6 +1013,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
 
     // Check if provider_id or scheduled_start changed and notify patient
     const providerChanged = provider_id !== undefined && oldData.provider_id !== provider_id;
+    const providerAssigned = provider_id !== undefined && !oldData.provider_id && provider_id;
     const timeChanged = scheduled_start !== undefined && 
                         oldData.scheduled_start && 
                         new Date(oldData.scheduled_start).getTime() !== new Date(scheduled_start).getTime();
@@ -1004,6 +1029,144 @@ router.put('/:id', authenticateToken, async (req, res) => {
         });
       } catch (notificationError) {
         console.error('Error sending appointment change notification (non-fatal):', notificationError);
+        // Don't fail the update if notification fails
+      }
+    }
+
+    // Notify physician when provider is assigned or changed (if case manager is updating)
+    if ((providerAssigned || providerChanged) && updatedAppointment && updatedAppointment.provider_id && 
+        (req.user.role === 'case_manager' || req.user.role === 'admin')) {
+      try {
+        // Get provider role to check if it's a physician
+        const [providerInfo] = await db.query(`
+          SELECT role, full_name FROM users WHERE user_id = ?
+        `, [updatedAppointment.provider_id]);
+        
+        if (providerInfo.length > 0) {
+          const providerRole = providerInfo[0].role;
+          const providerName = providerInfo[0].full_name || 'Provider';
+          
+          // Only notify if provider is a physician
+          if (providerRole === 'physician') {
+            const appointmentDate = new Date(updatedAppointment.scheduled_start);
+            const formattedDate = appointmentDate.toLocaleDateString('en-US', {
+              weekday: 'long',
+              year: 'numeric',
+              month: 'long',
+              day: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit'
+            });
+
+            const physicianSubject = providerAssigned 
+              ? 'New Patient Appointment Scheduled' 
+              : 'Appointment Reassigned to You';
+            const physicianBody = providerAssigned
+              ? `A new patient (${updatedAppointment.patient_name}) has been scheduled under your name for ${formattedDate} at ${updatedAppointment.facility_name || 'the facility'}.`
+              : `An appointment with ${updatedAppointment.patient_name} has been reassigned to you for ${formattedDate} at ${updatedAppointment.facility_name || 'the facility'}.`;
+
+            const physicianPayload = {
+              type: 'appointment_assigned',
+              appointment_id: id,
+              patient_id: updatedAppointment.patient_id,
+              provider_id: updatedAppointment.provider_id,
+              provider_name: providerName,
+              facility_id: updatedAppointment.facility_id,
+              scheduled_start: updatedAppointment.scheduled_start,
+              scheduled_end: updatedAppointment.scheduled_end,
+              appointment_type: updatedAppointment.appointment_type || 'general',
+              requires_confirmation: false
+            };
+
+            // Import notification helper functions
+            const { createNotification, createInAppMessage } = await import('./notifications.js');
+
+            // Create in-app message for physician
+            const physicianMessage = await createInAppMessage({
+              sender_id: null, // System message
+              recipient_id: updatedAppointment.provider_id,
+              recipient_type: 'user',
+              subject: physicianSubject,
+              body: physicianBody,
+              payload: physicianPayload,
+              priority: 'high'
+            });
+
+            if (physicianMessage.success) {
+              console.log(`✅ In-app message created for physician ${updatedAppointment.provider_id}`);
+            } else {
+              console.error(`❌ Failed to create in-app message for physician:`, physicianMessage.error);
+            }
+
+            // Create notification entry for physician
+            console.log(`📝 Creating notification entry for physician ${updatedAppointment.provider_id}...`);
+            console.log(`📝 Notification details:`, {
+              recipient_id: updatedAppointment.provider_id,
+              title: physicianSubject,
+              message: `${updatedAppointment.patient_name} has been scheduled for an appointment on ${formattedDate}`,
+              type: 'appointment'
+            });
+            
+            const physicianNotification = await createNotification({
+              recipient_id: updatedAppointment.provider_id,
+              patient_id: updatedAppointment.patient_id, // Include patient_id so staff can see this (not used in INSERT but kept for consistency)
+              title: physicianSubject,
+              message: `${updatedAppointment.patient_name} has been scheduled for an appointment on ${formattedDate}`,
+              type: 'appointment',
+              payload: JSON.stringify(physicianPayload)
+            });
+
+            if (physicianNotification.success) {
+              console.log(`✅ Notification created successfully for physician ${updatedAppointment.provider_id}, notification_id: ${physicianNotification.notification_id}`);
+              
+              // Verify notification was actually inserted into database
+              try {
+                const [verify] = await db.query(`
+                  SELECT notification_id, recipient_id, title, message, type, created_at
+                  FROM notifications
+                  WHERE notification_id = ?
+                `, [physicianNotification.notification_id]);
+                
+                if (verify.length > 0) {
+                  console.log(`✅ Verified notification exists in database:`, verify[0]);
+                } else {
+                  console.error(`❌ Notification was not found in database after creation!`);
+                }
+              } catch (verifyError) {
+                console.error(`❌ Error verifying notification in database:`, verifyError);
+              }
+            } else {
+              console.error(`❌ Failed to create notification for physician:`, physicianNotification.error);
+            }
+
+            // Emit real-time socket notification
+            if (io) {
+              io.to(`user_${updatedAppointment.provider_id}`).emit('newNotification', {
+                type: 'appointment_assigned',
+                title: physicianSubject,
+                message: providerAssigned 
+                  ? `A new patient (${updatedAppointment.patient_name}) has been scheduled under your name`
+                  : `An appointment with ${updatedAppointment.patient_name} has been reassigned to you`,
+                appointment_id: id,
+                patient_name: updatedAppointment.patient_name,
+                facility_name: updatedAppointment.facility_name,
+                scheduled_start: updatedAppointment.scheduled_start,
+                timestamp: new Date().toISOString()
+              });
+              
+              // Also emit appointment update event for real-time refresh
+              io.to(`user_${updatedAppointment.provider_id}`).emit('appointmentUpdated', {
+                appointment_id: id,
+                action: providerAssigned ? 'assigned' : 'reassigned',
+                status: updatedAppointment.status
+              });
+              
+              console.log(`✅ Socket notification sent to physician ${updatedAppointment.provider_id}`);
+            }
+          }
+        }
+      } catch (physicianNotifError) {
+        console.error('Error sending physician notification (non-fatal):', physicianNotifError);
         // Don't fail the update if notification fails
       }
     }
@@ -1456,10 +1619,19 @@ router.get('/availability/slots', authenticateToken, async (req, res) => {
 
     let query = `
       SELECT 
-        s.*,
+        s.slot_id,
+        s.provider_id,
+        s.facility_id,
+        DATE_FORMAT(s.slot_date, '%Y-%m-%d') AS slot_date,
+        s.start_time,
+        s.end_time,
+        s.slot_status,
+        s.appointment_id,
+        s.lock_status,
+        s.assignment_id,
+        s.created_at,
         u.full_name AS provider_name,
         f.facility_name,
-        a.appointment_id,
         CONCAT(p.first_name, ' ', p.last_name) AS patient_name
       FROM availability_slots s
       LEFT JOIN users u ON s.provider_id = u.user_id
@@ -1501,7 +1673,12 @@ router.get('/availability/slots', authenticateToken, async (req, res) => {
 
     query += ' ORDER BY s.slot_date ASC, s.start_time ASC';
 
+    console.log('Availability slots query:', query);
+    console.log('Query params:', params);
+
     const [slots] = await db.query(query, params);
+
+    console.log('Availability slots found:', slots.length);
 
     res.json({
       success: true,
@@ -2357,24 +2534,24 @@ router.post('/:id/approve', authenticateToken, async (req, res) => {
       if (patientUsers.length > 0) {
         const patientUserId = patientUsers[0].user_id;
         
-        // Create notification
-        await db.query(`
-          INSERT INTO notifications (
-            notification_id,
-            user_id,
-            patient_id,
-            type,
-            title,
-            message,
-            is_read,
-            created_at
-          ) VALUES (?, ?, NULL, 'appointment_approved', ?, ?, FALSE, NOW())
-        `, [
-          uuidv4(),
-          patientUserId,
-          'Appointment Approved',
-          `Your appointment for ${new Date(appointment.scheduled_start).toLocaleDateString()} at ${new Date(appointment.scheduled_start).toLocaleTimeString()} has been approved by the case manager.`
-        ]);
+        // Create notification using helper function
+        const { createNotification } = await import('./notifications.js');
+        const patientNotification = await createNotification({
+          recipient_id: patientUserId,
+          patient_id: appointment.patient_id,
+          title: 'Appointment Approved',
+          message: `Your appointment for ${new Date(appointment.scheduled_start).toLocaleDateString()} at ${new Date(appointment.scheduled_start).toLocaleTimeString()} has been approved by the case manager.`,
+          type: 'appointment',
+          payload: JSON.stringify({
+            type: 'appointment_approved',
+            appointment_id: id,
+            patient_id: appointment.patient_id
+          })
+        });
+
+        if (!patientNotification.success) {
+          console.error('Failed to create patient notification:', patientNotification.error);
+        }
 
         // Emit real-time notification
         if (io) {
@@ -2388,35 +2565,153 @@ router.post('/:id/approve', authenticateToken, async (req, res) => {
         }
       }
 
-      // Notify provider if assigned
+      // Notify provider (physician) if assigned
       if (appointment.provider_id) {
-        await db.query(`
-          INSERT INTO notifications (
-            notification_id,
-            user_id,
-            patient_id,
-            type,
-            title,
-            message,
-            is_read,
-            created_at
-          ) VALUES (?, ?, NULL, 'appointment_assigned', ?, ?, FALSE, NOW())
-        `, [
-          uuidv4(),
-          appointment.provider_id,
-          'New Appointment',
-          `New appointment with ${appointment.patient_name} on ${new Date(appointment.scheduled_start).toLocaleDateString()} at ${new Date(appointment.scheduled_start).toLocaleTimeString()}`
-        ]);
+        console.log(`🔔 Checking provider notification for provider_id: ${appointment.provider_id}`);
+        
+        // Get provider role to check if it's a physician
+        const [providerInfo] = await db.query(`
+          SELECT role, full_name FROM users WHERE user_id = ?
+        `, [appointment.provider_id]);
+        
+        if (providerInfo.length > 0) {
+          const providerRole = providerInfo[0].role;
+          const providerName = providerInfo[0].full_name || 'Provider';
+          
+          console.log(`📋 Provider role: ${providerRole}, name: ${providerName}`);
+          
+          // Only notify if provider is a physician
+          if (providerRole === 'physician') {
+            console.log(`✅ Provider is a physician, creating notifications...`);
+            
+            const appointmentDate = new Date(appointment.scheduled_start);
+            const formattedDate = appointmentDate.toLocaleDateString('en-US', {
+              weekday: 'long',
+              year: 'numeric',
+              month: 'long',
+              day: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit'
+            });
 
-        if (io) {
-          io.to(`user_${appointment.provider_id}`).emit('newNotification', {
-            type: 'appointment_assigned',
-            title: 'New Appointment',
-            message: `New appointment with ${appointment.patient_name}`,
-            appointment_id: id,
-            timestamp: new Date().toISOString()
-          });
+            const physicianSubject = 'New Patient Appointment Scheduled';
+            const physicianBody = `A new patient (${appointment.patient_name}) has been scheduled under your name for ${formattedDate} at ${appointment.facility_name || 'the facility'}.`;
+
+            const physicianPayload = {
+              type: 'appointment_assigned',
+              appointment_id: id,
+              patient_id: appointment.patient_id,
+              provider_id: appointment.provider_id,
+              provider_name: providerName,
+              facility_id: appointment.facility_id,
+              scheduled_start: appointment.scheduled_start,
+              scheduled_end: updated[0].scheduled_end,
+              appointment_type: appointment.appointment_type || 'general',
+              requires_confirmation: false
+            };
+
+            try {
+              // Import notification helper functions
+              const { createNotification, createInAppMessage } = await import('./notifications.js');
+              console.log(`📦 Notification functions imported successfully`);
+
+              // Create in-app message for physician
+              console.log(`💬 Creating in-app message for physician ${appointment.provider_id}...`);
+              const physicianMessage = await createInAppMessage({
+                sender_id: null, // System message
+                recipient_id: appointment.provider_id,
+                recipient_type: 'user',
+                subject: physicianSubject,
+                body: physicianBody,
+                payload: physicianPayload,
+                priority: 'high'
+              });
+
+              if (physicianMessage.success) {
+                console.log(`✅ In-app message created for physician ${appointment.provider_id}`);
+              } else {
+                console.error(`❌ Failed to create in-app message for physician:`, physicianMessage.error);
+              }
+
+              // Create notification entry for physician
+              console.log(`📝 Creating notification entry for physician ${appointment.provider_id}...`);
+              console.log(`📝 Notification details:`, {
+                recipient_id: appointment.provider_id,
+                title: 'New Patient Appointment Scheduled',
+                message: `${appointment.patient_name} has been scheduled for an appointment on ${formattedDate}`,
+                type: 'appointment'
+              });
+              
+              const physicianNotification = await createNotification({
+                recipient_id: appointment.provider_id,
+                patient_id: appointment.patient_id, // Include patient_id so staff can see this (not used in INSERT but kept for consistency)
+                title: 'New Patient Appointment Scheduled',
+                message: `${appointment.patient_name} has been scheduled for an appointment on ${formattedDate}`,
+                type: 'appointment',
+                payload: JSON.stringify(physicianPayload)
+              });
+
+              if (physicianNotification.success) {
+                console.log(`✅ Notification created successfully for physician ${appointment.provider_id}, notification_id: ${physicianNotification.notification_id}`);
+                
+                // Verify notification was actually inserted into database
+                try {
+                  const [verify] = await db.query(`
+                    SELECT notification_id, recipient_id, title, message, type, created_at
+                    FROM notifications
+                    WHERE notification_id = ?
+                  `, [physicianNotification.notification_id]);
+                  
+                  if (verify.length > 0) {
+                    console.log(`✅ Verified notification exists in database:`, verify[0]);
+                  } else {
+                    console.error(`❌ Notification was not found in database after creation!`);
+                  }
+                } catch (verifyError) {
+                  console.error(`❌ Error verifying notification in database:`, verifyError);
+                }
+              } else {
+                console.error(`❌ Failed to create notification for physician:`, physicianNotification.error);
+              }
+
+              // Emit real-time socket notification
+              if (io) {
+                console.log(`🔌 Emitting socket notification to physician ${appointment.provider_id}...`);
+                io.to(`user_${appointment.provider_id}`).emit('newNotification', {
+                  type: 'appointment_assigned',
+                  title: 'New Patient Appointment Scheduled',
+                  message: `A new patient (${appointment.patient_name}) has been scheduled under your name`,
+                  appointment_id: id,
+                  patient_name: appointment.patient_name,
+                  facility_name: appointment.facility_name,
+                  scheduled_start: appointment.scheduled_start,
+                  timestamp: new Date().toISOString()
+                });
+                
+                // Also emit appointment update event for real-time refresh
+                io.to(`user_${appointment.provider_id}`).emit('appointmentUpdated', {
+                  appointment_id: id,
+                  action: 'assigned',
+                  status: 'confirmed'
+                });
+                
+                console.log(`✅ Socket notification sent to physician ${appointment.provider_id}`);
+              } else {
+                console.warn(`⚠️ Socket.IO (io) is not available, skipping real-time notification`);
+              }
+            } catch (notificationError) {
+              console.error(`❌ Error creating physician notifications:`, notificationError);
+              console.error(`Error stack:`, notificationError.stack);
+              // Don't fail the approval if notification fails
+            }
+          } else {
+            console.log(`⚠️ Provider role is ${providerRole}, not a physician. Skipping notification.`);
+          }
+        } else {
+          console.error(`❌ Provider not found for user_id: ${appointment.provider_id}`);
         }
+      } else {
+        console.log(`⚠️ No provider_id assigned to appointment ${id}`);
       }
     } catch (notifError) {
       console.error('Error sending approval notifications (non-fatal):', notifError);

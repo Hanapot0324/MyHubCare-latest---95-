@@ -2,17 +2,14 @@ import React, { useState, useEffect } from 'react';
 import {
   Calendar,
   Clock,
-  User,
   MapPin,
   CheckCircle,
   XCircle,
   Plus,
-  Edit,
   Trash2,
   AlertCircle,
   Loader2,
   Search,
-  Filter,
   Lock,
   Unlock,
   X
@@ -25,6 +22,7 @@ const DoctorAssignments = ({ socket }) => {
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [filterType, setFilterType] = useState('all'); // 'all', 'upcoming', 'past'
   const [showAddModal, setShowAddModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showConflictModal, setShowConflictModal] = useState(false);
@@ -43,7 +41,7 @@ const DoctorAssignments = ({ socket }) => {
 
   useEffect(() => {
     applyFilters();
-  }, [assignments, searchTerm]);
+  }, [assignments, searchTerm, filterType]);
 
   const getAuthToken = () => {
     return localStorage.getItem('token');
@@ -167,13 +165,31 @@ const DoctorAssignments = ({ socket }) => {
 
   const applyFilters = () => {
     let filtered = [...assignments];
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
 
+    // Filter by type (all, upcoming, past)
+    if (filterType === 'upcoming') {
+      filtered = filtered.filter(assignment => {
+        const assignmentDate = new Date(assignment.assignment_date);
+        assignmentDate.setHours(0, 0, 0, 0);
+        return assignmentDate >= today;
+      });
+    } else if (filterType === 'past') {
+      filtered = filtered.filter(assignment => {
+        const assignmentDate = new Date(assignment.assignment_date);
+        assignmentDate.setHours(0, 0, 0, 0);
+        return assignmentDate < today;
+      });
+    }
+
+    // Filter by search term
     if (searchTerm) {
       const searchLower = searchTerm.toLowerCase();
       filtered = filtered.filter(assignment => {
-        const providerMatch = assignment.provider_name?.toLowerCase().includes(searchLower);
+        const doctorMatch = assignment.doctor_name?.toLowerCase().includes(searchLower) || assignment.provider_name?.toLowerCase().includes(searchLower);
         const facilityMatch = assignment.facility_name?.toLowerCase().includes(searchLower);
-        return providerMatch || facilityMatch;
+        return doctorMatch || facilityMatch;
       });
     }
 
@@ -343,30 +359,84 @@ const DoctorAssignments = ({ socket }) => {
       </div>
 
       {/* Filters */}
-      <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
-        <div style={{ position: 'relative', flex: 1 }}>
-          <Search
-            size={18}
-            color="#A31D1D"
+      <div style={{ marginBottom: '20px' }}>
+        <div style={{ display: 'flex', gap: '10px', marginBottom: '15px' }}>
+          <div style={{ position: 'relative', flex: 1 }}>
+            <Search
+              size={18}
+              color="#A31D1D"
+              style={{
+                position: 'absolute',
+                left: '10px',
+                top: '50%',
+                transform: 'translateY(-50%)',
+              }}
+            />
+            <input
+              type="text"
+              placeholder="Search by provider or facility..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              style={{
+                padding: '8px 12px 8px 36px',
+                border: '1px solid #ced4da',
+                borderRadius: '4px',
+                width: '100%',
+              }}
+            />
+          </div>
+        </div>
+        
+        {/* Filter Tabs */}
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <button
+            onClick={() => setFilterType('all')}
             style={{
-              position: 'absolute',
-              left: '10px',
-              top: '50%',
-              transform: 'translateY(-50%)',
+              padding: '8px 20px',
+              background: filterType === 'all' ? '#A31D1D' : '#e9ecef',
+              color: filterType === 'all' ? 'white' : '#333',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontWeight: 'bold',
+              fontSize: '14px',
+              transition: 'all 0.2s ease'
             }}
-          />
-          <input
-            type="text"
-            placeholder="Search by provider or facility..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+          >
+            All Assignments
+          </button>
+          <button
+            onClick={() => setFilterType('upcoming')}
             style={{
-              padding: '8px 12px 8px 36px',
-              border: '1px solid #ced4da',
-              borderRadius: '4px',
-              width: '100%',
+              padding: '8px 20px',
+              background: filterType === 'upcoming' ? '#A31D1D' : '#e9ecef',
+              color: filterType === 'upcoming' ? 'white' : '#333',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontWeight: 'bold',
+              fontSize: '14px',
+              transition: 'all 0.2s ease'
             }}
-          />
+          >
+            Upcoming
+          </button>
+          <button
+            onClick={() => setFilterType('past')}
+            style={{
+              padding: '8px 20px',
+              background: filterType === 'past' ? '#A31D1D' : '#e9ecef',
+              color: filterType === 'past' ? 'white' : '#333',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontWeight: 'bold',
+              fontSize: '14px',
+              transition: 'all 0.2s ease'
+            }}
+          >
+            Past
+          </button>
         </div>
       </div>
 
@@ -429,7 +499,7 @@ const DoctorAssignments = ({ socket }) => {
               {/* Assignment Info */}
               <div style={{ marginBottom: '15px', marginTop: '25px' }}>
                 <h3 style={{ margin: '0 0 10px 0', color: '#333', fontSize: '18px' }}>
-                  {assignment.provider_name || 'Unknown Provider'}
+                  {assignment.doctor_name || assignment.provider_name || 'Unknown Doctor'}
                 </h3>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '14px', color: '#6c757d' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -438,21 +508,55 @@ const DoctorAssignments = ({ socket }) => {
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <Calendar size={16} />
-                    <span>{formatDate(assignment.start_date)} - {formatDate(assignment.end_date)}</span>
+                    <span>{formatDate(assignment.assignment_date)}</span>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <Clock size={16} />
-                    <span>{formatTime(assignment.daily_start)} - {formatTime(assignment.daily_end)}</span>
+                    <span>{formatTime(assignment.start_time)} - {formatTime(assignment.end_time)}</span>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span style={{ fontWeight: 'bold' }}>Days:</span>
-                    <span>{assignment.days_of_week.split(',').map(d => d.trim().charAt(0).toUpperCase() + d.trim().slice(1)).join(', ')}</span>
-                  </div>
+                  {assignment.max_patients && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ fontWeight: 'bold' }}>Max Patients:</span>
+                      <span>{assignment.max_patients}</span>
+                    </div>
+                  )}
+                  {assignment.notes && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ fontWeight: 'bold' }}>Notes:</span>
+                      <span>{assignment.notes}</span>
+                    </div>
+                  )}
                 </div>
               </div>
 
               {/* Actions */}
               <div style={{ display: 'flex', gap: '10px', marginTop: '15px' }}>
+                <button
+                  onClick={() => {
+                    setSelectedAssignment(assignment);
+                    setShowEditModal(true);
+                  }}
+                  style={{
+                    flex: 1,
+                    padding: '8px 16px',
+                    background: '#007bff',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontSize: '14px',
+                    fontWeight: 'bold',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px'
+                  }}
+                  onMouseEnter={(e) => e.target.style.background = '#0056b3'}
+                  onMouseLeave={(e) => e.target.style.background = '#007bff'}
+                >
+                  <span>✏️</span>
+                  Edit
+                </button>
                 <button
                   onClick={() => {
                     setSelectedAssignment(assignment);
@@ -467,41 +571,39 @@ const DoctorAssignments = ({ socket }) => {
                     borderRadius: '4px',
                     cursor: 'pointer',
                     fontSize: '14px',
-                    fontWeight: 'bold'
+                    fontWeight: 'bold',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px'
                   }}
+                  onMouseEnter={(e) => e.target.style.background = '#e0a800'}
+                  onMouseLeave={(e) => e.target.style.background = '#ffc107'}
                 >
-                  View Conflicts
-                </button>
-                <button
-                  onClick={() => {
-                    setSelectedAssignment(assignment);
-                    setShowEditModal(true);
-                  }}
-                  style={{
-                    padding: '8px 16px',
-                    background: '#007bff',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    fontSize: '14px',
-                    fontWeight: 'bold'
-                  }}
-                >
-                  <Edit size={16} />
+                  <AlertCircle size={16} />
+                  Conflicts
                 </button>
                 <button
                   onClick={() => handleDeleteAssignment(assignment.assignment_id)}
                   disabled={actionLoading}
                   style={{
                     padding: '8px 16px',
-                    background: '#dc3545',
+                    background: actionLoading ? '#6c757d' : '#dc3545',
                     color: 'white',
                     border: 'none',
                     borderRadius: '4px',
                     cursor: actionLoading ? 'not-allowed' : 'pointer',
                     fontSize: '14px',
-                    fontWeight: 'bold'
+                    fontWeight: 'bold',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!actionLoading) e.target.style.background = '#c82333';
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!actionLoading) e.target.style.background = '#dc3545';
                   }}
                 >
                   <Trash2 size={16} />
@@ -534,7 +636,7 @@ const DoctorAssignments = ({ socket }) => {
             setShowEditModal(false);
             setSelectedAssignment(null);
           }}
-          onSave={(data) => handleUpdateAssignment(selectedAssignment.assignment_id, data)}
+          onSave={(assignmentData) => handleUpdateAssignment(selectedAssignment.assignment_id, assignmentData)}
         />
       )}
 
@@ -580,31 +682,64 @@ const DoctorAssignments = ({ socket }) => {
 
 // Assignment Modal Component
 const AssignmentModal = ({ mode, assignment, providers, facilities, onClose, onSave }) => {
+  // Helper function to format date for input field (YYYY-MM-DD)
+  const formatDateForInput = (dateString) => {
+    if (!dateString) return '';
+    // If already in YYYY-MM-DD format, return as is
+    if (typeof dateString === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateString)) {
+      return dateString;
+    }
+    // Otherwise, parse and format
+    const date = new Date(dateString);
+    if (isNaN(date.getTime())) return '';
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
   const [formData, setFormData] = useState(
     assignment ? {
-      provider_id: assignment.provider_id,
+      doctor_id: assignment.doctor_id || assignment.provider_id,
       facility_id: assignment.facility_id,
-      start_date: assignment.start_date,
-      end_date: assignment.end_date,
-      daily_start: assignment.daily_start,
-      daily_end: assignment.daily_end,
-      days_of_week: assignment.days_of_week,
+      assignment_date: formatDateForInput(assignment.assignment_date),
+      start_time: assignment.start_time || '08:00:00',
+      end_time: assignment.end_time || '17:00:00',
+      max_patients: assignment.max_patients || 8,
+      notes: assignment.notes || '',
       is_locked: assignment.is_locked || false
     } : {
-      provider_id: '',
+      doctor_id: '',
       facility_id: '',
-      start_date: '',
-      end_date: '',
-      daily_start: '08:00',
-      daily_end: '17:00',
-      days_of_week: 'mon,tue,wed,thu,fri',
+      assignment_date: '',
+      start_time: '08:00:00',
+      end_time: '17:00:00',
+      max_patients: 8,
+      notes: '',
       is_locked: false
     }
   );
 
+
   const handleSubmit = (e) => {
     e.preventDefault();
-    onSave(formData);
+    
+    // Convert time format from HH:MM to HH:MM:SS
+    const formatTimeForBackend = (timeStr) => {
+      if (!timeStr) return timeStr;
+      // If already in HH:MM:SS format, return as is
+      if (timeStr.split(':').length === 3) return timeStr;
+      // Otherwise, add :00 for seconds
+      return timeStr + ':00';
+    };
+    
+    const formattedData = {
+      ...formData,
+      start_time: formatTimeForBackend(formData.start_time),
+      end_time: formatTimeForBackend(formData.end_time)
+    };
+    
+    onSave(formattedData);
   };
 
   const handleChange = (e) => {
@@ -615,32 +750,6 @@ const AssignmentModal = ({ mode, assignment, providers, facilities, onClose, onS
     });
   };
 
-  const handleDayToggle = (day) => {
-    const days = formData.days_of_week.split(',');
-    const dayIndex = days.indexOf(day);
-    
-    if (dayIndex > -1) {
-      days.splice(dayIndex, 1);
-    } else {
-      days.push(day);
-    }
-    
-    setFormData({
-      ...formData,
-      days_of_week: days.join(',')
-    });
-  };
-
-  const days = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
-  const dayLabels = {
-    mon: 'Monday',
-    tue: 'Tuesday',
-    wed: 'Wednesday',
-    thu: 'Thursday',
-    fri: 'Friday',
-    sat: 'Saturday',
-    sun: 'Sunday'
-  };
 
   return (
     <div style={{
@@ -684,11 +793,11 @@ const AssignmentModal = ({ mode, assignment, providers, facilities, onClose, onS
         <form onSubmit={handleSubmit}>
           <div style={{ marginBottom: '20px' }}>
             <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold', color: '#333' }}>
-              Provider <span style={{ color: 'red' }}>*</span>
+              Doctor <span style={{ color: 'red' }}>*</span>
             </label>
             <select
-              name="provider_id"
-              value={formData.provider_id}
+              name="doctor_id"
+              value={formData.doctor_id}
               onChange={handleChange}
               required
               disabled={mode === 'edit'}
@@ -700,7 +809,7 @@ const AssignmentModal = ({ mode, assignment, providers, facilities, onClose, onS
                 fontSize: '16px'
               }}
             >
-              <option value="">Select Provider</option>
+              <option value="">Select Doctor</option>
               {providers.map(provider => (
                 <option key={provider.user_id} value={provider.user_id}>
                   {provider.full_name || provider.username}
@@ -735,17 +844,45 @@ const AssignmentModal = ({ mode, assignment, providers, facilities, onClose, onS
             </select>
           </div>
 
+          <div style={{ marginBottom: '20px' }}>
+            <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold', color: '#333' }}>
+              Assignment Date <span style={{ color: 'red' }}>*</span>
+            </label>
+            <input
+              type="date"
+              name="assignment_date"
+              value={formData.assignment_date}
+              onChange={handleChange}
+              required
+              min={new Date().toISOString().split('T')[0]}
+              style={{
+                width: '100%',
+                padding: '12px',
+                border: '1px solid #ced4da',
+                borderRadius: '4px',
+                fontSize: '16px'
+              }}
+            />
+            <p style={{ marginTop: '5px', fontSize: '12px', color: '#6c757d' }}>
+              Select a single date for this assignment (per-day model)
+            </p>
+          </div>
+
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
             <div>
               <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold', color: '#333' }}>
-                Start Date <span style={{ color: 'red' }}>*</span>
+                Start Time <span style={{ color: 'red' }}>*</span>
               </label>
               <input
-                type="date"
-                name="start_date"
-                value={formData.start_date}
-                onChange={handleChange}
+                type="time"
+                name="start_time"
+                value={formData.start_time ? formData.start_time.slice(0, 5) : ''}
+                onChange={(e) => {
+                  const timeValue = e.target.value;
+                  setFormData({ ...formData, start_time: timeValue ? timeValue + ':00' : '' });
+                }}
                 required
+                step="3600"
                 style={{
                   width: '100%',
                   padding: '12px',
@@ -757,14 +894,18 @@ const AssignmentModal = ({ mode, assignment, providers, facilities, onClose, onS
             </div>
             <div>
               <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold', color: '#333' }}>
-                End Date <span style={{ color: 'red' }}>*</span>
+                End Time <span style={{ color: 'red' }}>*</span>
               </label>
               <input
-                type="date"
-                name="end_date"
-                value={formData.end_date}
-                onChange={handleChange}
+                type="time"
+                name="end_time"
+                value={formData.end_time ? formData.end_time.slice(0, 5) : ''}
+                onChange={(e) => {
+                  const timeValue = e.target.value;
+                  setFormData({ ...formData, end_time: timeValue ? timeValue + ':00' : '' });
+                }}
                 required
+                step="3600"
                 style={{
                   width: '100%',
                   padding: '12px',
@@ -779,33 +920,15 @@ const AssignmentModal = ({ mode, assignment, providers, facilities, onClose, onS
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
             <div>
               <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold', color: '#333' }}>
-                Daily Start Time <span style={{ color: 'red' }}>*</span>
+                Max Patients
               </label>
               <input
-                type="time"
-                name="daily_start"
-                value={formData.daily_start}
+                type="number"
+                name="max_patients"
+                value={formData.max_patients}
                 onChange={handleChange}
-                required
-                style={{
-                  width: '100%',
-                  padding: '12px',
-                  border: '1px solid #ced4da',
-                  borderRadius: '4px',
-                  fontSize: '16px'
-                }}
-              />
-            </div>
-            <div>
-              <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold', color: '#333' }}>
-                Daily End Time <span style={{ color: 'red' }}>*</span>
-              </label>
-              <input
-                type="time"
-                name="daily_end"
-                value={formData.daily_end}
-                onChange={handleChange}
-                required
+                min="1"
+                max="50"
                 style={{
                   width: '100%',
                   padding: '12px',
@@ -819,32 +942,25 @@ const AssignmentModal = ({ mode, assignment, providers, facilities, onClose, onS
 
           <div style={{ marginBottom: '20px' }}>
             <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold', color: '#333' }}>
-              Days of Week <span style={{ color: 'red' }}>*</span>
+              Notes (Optional)
             </label>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
-              {days.map(day => {
-                const isSelected = formData.days_of_week.split(',').includes(day);
-                return (
-                  <button
-                    key={day}
-                    type="button"
-                    onClick={() => handleDayToggle(day)}
-                    style={{
-                      padding: '8px 16px',
-                      background: isSelected ? '#28a745' : '#e9ecef',
-                      color: isSelected ? 'white' : '#333',
-                      border: 'none',
-                      borderRadius: '4px',
-                      cursor: 'pointer',
-                      fontWeight: 'bold'
-                    }}
-                  >
-                    {dayLabels[day]}
-                  </button>
-                );
-              })}
-            </div>
+            <textarea
+              name="notes"
+              value={formData.notes}
+              onChange={handleChange}
+              rows="3"
+              style={{
+                width: '100%',
+                padding: '12px',
+                border: '1px solid #ced4da',
+                borderRadius: '4px',
+                fontSize: '16px',
+                resize: 'vertical'
+              }}
+              placeholder="Add any notes about this assignment..."
+            />
           </div>
+
 
           <div style={{ marginBottom: '20px' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
@@ -861,21 +977,6 @@ const AssignmentModal = ({ mode, assignment, providers, facilities, onClose, onS
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', paddingTop: '20px', borderTop: '1px solid #e9ecef' }}>
             <button
-              type="button"
-              onClick={onClose}
-              style={{
-                padding: '10px 20px',
-                background: '#6c757d',
-                color: 'white',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                fontWeight: 'bold'
-              }}
-            >
-              Cancel
-            </button>
-            <button
               type="submit"
               style={{
                 padding: '10px 20px',
@@ -891,6 +992,7 @@ const AssignmentModal = ({ mode, assignment, providers, facilities, onClose, onS
             </button>
           </div>
         </form>
+
       </div>
     </div>
   );
@@ -902,9 +1004,13 @@ const ConflictsModal = ({ assignment, onClose }) => {
   const [loading, setLoading] = useState(false);
   const [showAddConflict, setShowAddConflict] = useState(false);
   const [newConflict, setNewConflict] = useState({
-    conflict_start: '',
-    conflict_end: '',
-    reason: ''
+    conflict_date: '',
+    conflict_type: 'leave',
+    reason: '',
+    start_time: '',
+    end_time: '',
+    is_all_day: true,
+    facility_id: assignment?.facility_id || ''
   });
 
   useEffect(() => {
@@ -945,24 +1051,49 @@ const ConflictsModal = ({ assignment, onClose }) => {
       const token = getAuthToken();
       if (!token) return;
 
-      if (!newConflict.conflict_start || !newConflict.conflict_end) {
-        alert('Please provide start and end times for the conflict');
+      if (!newConflict.conflict_date || !newConflict.reason) {
+        alert('Please provide conflict date and reason');
         return;
       }
 
-      const response = await fetch(`${API_BASE_URL}/doctor-assignments/${assignment.assignment_id}/conflicts`, {
+      if (!newConflict.is_all_day && (!newConflict.start_time || !newConflict.end_time)) {
+        alert('Please provide start and end times for partial day conflicts');
+        return;
+      }
+
+      // Build conflict payload
+      const conflictPayload = {
+        doctor_id: assignment.doctor_id || assignment.provider_id,
+        facility_id: newConflict.facility_id || null,
+        conflict_date: newConflict.conflict_date,
+        conflict_type: newConflict.conflict_type,
+        reason: newConflict.reason,
+        is_all_day: newConflict.is_all_day,
+        start_time: newConflict.is_all_day ? null : newConflict.start_time,
+        end_time: newConflict.is_all_day ? null : newConflict.end_time
+      };
+
+      const response = await fetch(`${API_BASE_URL}/doctor-conflicts`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(newConflict)
+        body: JSON.stringify(conflictPayload)
       });
 
       const data = await response.json();
 
       if (data.success) {
-        setNewConflict({ conflict_start: '', conflict_end: '', reason: '' });
+        setNewConflict({
+          conflict_date: '',
+          conflict_type: 'leave',
+          reason: '',
+          start_time: '',
+          end_time: '',
+          is_all_day: true,
+          facility_id: assignment?.facility_id || ''
+        });
         setShowAddConflict(false);
         fetchConflicts();
       } else {
@@ -983,7 +1114,7 @@ const ConflictsModal = ({ assignment, onClose }) => {
       const token = getAuthToken();
       if (!token) return;
 
-      const response = await fetch(`${API_BASE_URL}/doctor-assignments/${assignment.assignment_id}/conflicts/${conflictId}`, {
+      const response = await fetch(`${API_BASE_URL}/doctor-conflicts/${conflictId}`, {
         method: 'DELETE',
         headers: {
           Authorization: `Bearer ${token}`
@@ -1042,8 +1173,9 @@ const ConflictsModal = ({ assignment, onClose }) => {
 
         <div style={{ marginBottom: '20px' }}>
           <p style={{ margin: '0 0 10px 0', color: '#6c757d' }}>
-            <strong>Provider:</strong> {assignment.provider_name}<br />
-            <strong>Facility:</strong> {assignment.facility_name}
+            <strong>Doctor:</strong> {assignment.doctor_name || assignment.provider_name}<br />
+            <strong>Facility:</strong> {assignment.facility_name}<br />
+            <strong>Date:</strong> {formatDate(assignment.assignment_date)}
           </p>
         </div>
 
@@ -1073,11 +1205,12 @@ const ConflictsModal = ({ assignment, onClose }) => {
           }}>
             <h3 style={{ margin: '0 0 15px 0' }}>New Conflict</h3>
             <div style={{ marginBottom: '15px' }}>
-              <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Start Date & Time</label>
+              <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Conflict Date <span style={{ color: 'red' }}>*</span></label>
               <input
-                type="datetime-local"
-                value={newConflict.conflict_start}
-                onChange={(e) => setNewConflict({ ...newConflict, conflict_start: e.target.value })}
+                type="date"
+                value={newConflict.conflict_date}
+                onChange={(e) => setNewConflict({ ...newConflict, conflict_date: e.target.value })}
+                required
                 style={{
                   width: '100%',
                   padding: '8px',
@@ -1087,24 +1220,79 @@ const ConflictsModal = ({ assignment, onClose }) => {
               />
             </div>
             <div style={{ marginBottom: '15px' }}>
-              <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>End Date & Time</label>
-              <input
-                type="datetime-local"
-                value={newConflict.conflict_end}
-                onChange={(e) => setNewConflict({ ...newConflict, conflict_end: e.target.value })}
+              <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Conflict Type <span style={{ color: 'red' }}>*</span></label>
+              <select
+                value={newConflict.conflict_type}
+                onChange={(e) => setNewConflict({ ...newConflict, conflict_type: e.target.value })}
                 style={{
                   width: '100%',
                   padding: '8px',
                   border: '1px solid #ced4da',
                   borderRadius: '4px'
                 }}
-              />
+              >
+                <option value="leave">Leave</option>
+                <option value="meeting">Meeting</option>
+                <option value="training">Training</option>
+                <option value="emergency">Emergency</option>
+                <option value="other">Other</option>
+              </select>
             </div>
             <div style={{ marginBottom: '15px' }}>
-              <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Reason (Optional)</label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={newConflict.is_all_day}
+                  onChange={(e) => setNewConflict({ ...newConflict, is_all_day: e.target.checked })}
+                  style={{ width: '18px', height: '18px' }}
+                />
+                <span style={{ fontWeight: 'bold' }}>All Day Conflict</span>
+              </label>
+            </div>
+            {!newConflict.is_all_day && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '15px' }}>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Start Time</label>
+                  <input
+                    type="time"
+                    value={newConflict.start_time ? newConflict.start_time.slice(0, 5) : ''}
+                    onChange={(e) => {
+                      const timeValue = e.target.value;
+                      setNewConflict({ ...newConflict, start_time: timeValue ? timeValue + ':00' : '' });
+                    }}
+                    style={{
+                      width: '100%',
+                      padding: '8px',
+                      border: '1px solid #ced4da',
+                      borderRadius: '4px'
+                    }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>End Time</label>
+                  <input
+                    type="time"
+                    value={newConflict.end_time ? newConflict.end_time.slice(0, 5) : ''}
+                    onChange={(e) => {
+                      const timeValue = e.target.value;
+                      setNewConflict({ ...newConflict, end_time: timeValue ? timeValue + ':00' : '' });
+                    }}
+                    style={{
+                      width: '100%',
+                      padding: '8px',
+                      border: '1px solid #ced4da',
+                      borderRadius: '4px'
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+            <div style={{ marginBottom: '15px' }}>
+              <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Reason <span style={{ color: 'red' }}>*</span></label>
               <textarea
                 value={newConflict.reason}
                 onChange={(e) => setNewConflict({ ...newConflict, reason: e.target.value })}
+                required
                 style={{
                   width: '100%',
                   padding: '8px',
@@ -1112,6 +1300,7 @@ const ConflictsModal = ({ assignment, onClose }) => {
                   borderRadius: '4px',
                   minHeight: '60px'
                 }}
+                placeholder="Describe the conflict reason..."
               />
             </div>
             <div style={{ display: 'flex', gap: '10px' }}>
@@ -1132,7 +1321,15 @@ const ConflictsModal = ({ assignment, onClose }) => {
               <button
                 onClick={() => {
                   setShowAddConflict(false);
-                  setNewConflict({ conflict_start: '', conflict_end: '', reason: '' });
+                  setNewConflict({
+                    conflict_date: '',
+                    conflict_type: 'leave',
+                    reason: '',
+                    start_time: '',
+                    end_time: '',
+                    is_all_day: true,
+                    facility_id: assignment?.facility_id || ''
+                  });
                 }}
                 style={{
                   padding: '8px 16px',
@@ -1173,7 +1370,11 @@ const ConflictsModal = ({ assignment, onClose }) => {
               >
                 <div style={{ flex: 1 }}>
                   <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>
-                    {new Date(conflict.conflict_start).toLocaleString()} - {new Date(conflict.conflict_end).toLocaleString()}
+                    {formatDate(conflict.conflict_date)}
+                    {conflict.is_all_day ? ' (All Day)' : ` (${formatTime(conflict.start_time)} - ${formatTime(conflict.end_time)})`}
+                  </div>
+                  <div style={{ color: '#991b1b', fontSize: '14px', marginBottom: '5px' }}>
+                    <strong>Type:</strong> {conflict.conflict_type?.charAt(0).toUpperCase() + conflict.conflict_type?.slice(1)}
                   </div>
                   {conflict.reason && (
                     <div style={{ color: '#991b1b', fontSize: '14px' }}>

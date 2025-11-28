@@ -120,9 +120,10 @@ const NotificationSystem = ({ socket }) => {
                 
                 // Validate appointments exist before showing notifications
                 // Filter out notifications for appointments that no longer exist
+                // Also fetch appointment details for formatted display
                 const token = getAuthToken();
                 const validationPromises = allNotifications.map(async (notif) => {
-                    // If notification has an appointment_id, verify it exists
+                    // If notification has an appointment_id, verify it exists and fetch details
                     if (notif.appointment_id) {
                         try {
                             const appointmentResponse = await fetch(`${API_BASE_URL}/appointments/${notif.appointment_id}`, {
@@ -133,14 +134,15 @@ const NotificationSystem = ({ socket }) => {
                             if (appointmentResponse.ok) {
                                 const appointmentData = await appointmentResponse.json();
                                 if (appointmentData.success && appointmentData.data) {
-                                    // Include appointment status in notification
+                                    // Include appointment status and full details in notification
                                     return {
                                         ...notif,
                                         appointment: notif.appointment ? {
                                             ...notif.appointment,
                                             status: appointmentData.data.status
                                         } : null,
-                                        appointment_status: appointmentData.data.status
+                                        appointment_status: appointmentData.data.status,
+                                        appointmentDetails: appointmentData.data // Attach full appointment details for formatting
                                     };
                                 }
                             } else if (appointmentResponse.status === 404) {
@@ -329,6 +331,12 @@ const NotificationSystem = ({ socket }) => {
                 console.log('📅 New appointment notification:', data);
                 fetchNotifications(); // Refresh to get the actual notifications
             });
+
+            // Listen for appointment updates
+            socket.on('appointmentUpdated', (data) => {
+                console.log('🔄 Appointment updated via socket:', data);
+                fetchNotifications(); // Refresh to get the latest data
+            });
         };
 
         setupSocket();
@@ -341,6 +349,7 @@ const NotificationSystem = ({ socket }) => {
         return () => {
             socket.off('newNotification');
             socket.off('newAppointment');
+            socket.off('appointmentUpdated');
             socket.off('connect');
         };
     }, [socket]);
@@ -449,6 +458,72 @@ const NotificationSystem = ({ socket }) => {
             setSelectedNotification(notification);
             setShowNotificationModal(true);
         }
+    };
+
+    // Helper function to format notification message based on type
+    const formatNotificationMessage = (notification) => {
+        const details = notification.appointmentDetails;
+        
+        const isApproved = notification.type === 'appointment_approved' || 
+                          notification.type === 'appointment_request_approved' ||
+                          notification.title?.toLowerCase().includes('approved') ||
+                          notification.message?.toLowerCase().includes('approved');
+        
+        const isDeclined = notification.type === 'appointment_declined' || 
+                          notification.type === 'appointment_request_declined' ||
+                          notification.title?.toLowerCase().includes('declined') ||
+                          notification.message?.toLowerCase().includes('declined');
+
+        if (isApproved && details) {
+            const appointmentDate = new Date(details.scheduled_start || notification.appointment?.scheduled_start);
+            const appointmentTime = new Date(details.scheduled_start || notification.appointment?.scheduled_start);
+            const patientName = details.patient_name || 'Patient';
+            const facilityName = details.facility_name || 'Facility';
+            const providerName = details.provider_name || 'Provider';
+            const appointmentType = details.appointment_type || notification.appointment?.appointment_type || 'Appointment';
+            
+            return {
+                formatted: true,
+                subject: '✅ Appointment Confirmed - MyHubCares',
+                greeting: `Dear ${patientName},`,
+                mainMessage: 'Your appointment request has been APPROVED!',
+                details: [
+                    { icon: '📅', label: 'Date', value: appointmentDate.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) },
+                    { icon: '⏰', label: 'Time', value: appointmentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) },
+                    { icon: '🏥', label: 'Branch', value: facilityName },
+                    { icon: '👨‍⚕️', label: 'Provider', value: providerName },
+                    { icon: '📝', label: 'Type', value: appointmentType.replace(/_/g, ' ').toUpperCase() }
+                ],
+                notes: details.case_manager_notes || details.notes || null,
+                footer: 'Please arrive 15 minutes before your scheduled time.',
+                closing: 'Thank you for choosing MyHubCares!'
+            };
+        }
+
+        if (isDeclined) {
+            const appointmentDate = details?.scheduled_start || notification.appointment?.scheduled_start || notification.timestamp;
+            const appointmentTime = details?.scheduled_start || notification.appointment?.scheduled_start || notification.timestamp;
+            const patientName = details?.patient_name || 'Patient';
+            const declineReason = notification.decline_reason || 
+                                 (notification.message?.includes('Reason:') ? notification.message.split('Reason:')[1]?.trim() : null) ||
+                                 'No reason provided';
+            
+            return {
+                formatted: true,
+                subject: '❌ Appointment Request Update - MyHubCares',
+                greeting: `Dear ${patientName},`,
+                mainMessage: 'We regret to inform you that your appointment request could not be approved.',
+                details: [
+                    { icon: '📅', label: 'Requested Date', value: new Date(appointmentDate).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) },
+                    { icon: '⏰', label: 'Requested Time', value: new Date(appointmentTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) }
+                ],
+                declineReason: declineReason,
+                footer: 'Please submit a new request with a different date/time or contact us for assistance.',
+                closing: 'Thank you for your understanding.'
+            };
+        }
+
+        return { formatted: false };
     };
 
     const unreadNotifications = notifications.filter(n => !n.read);
@@ -573,6 +648,9 @@ const NotificationSystem = ({ socket }) => {
                                 notifications.map((notification) => {
                                     const isClickable = true; // All notifications are clickable now
                                     
+                                    // Get formatted notification if it's an approval/decline
+                                    const formatted = formatNotificationMessage(notification);
+                                    
                                     return (
                                     <div
                                         key={notification.id}
@@ -624,7 +702,7 @@ const NotificationSystem = ({ socket }) => {
                                                             color: '#1f2937',
                                                         }}
                                                     >
-                                                        {notification.title}
+                                                        {formatted.formatted ? formatted.subject : notification.title}
                                                     </strong>
                                                     {!notification.read && !notification.is_read && (
                                                         <span
@@ -637,24 +715,89 @@ const NotificationSystem = ({ socket }) => {
                                                         />
                                                     )}
                                                 </div>
-                                                <p
-                                                    style={{
-                                                        fontSize: '13px',
-                                                        color: '#6b7280',
-                                                        margin: '4px 0',
-                                                        lineHeight: '1.5',
-                                                    }}
-                                                >
-                                                    {notification.message.includes('has been accepted.') ? (
-                                                        <>
-                                                            {notification.message.split('has been accepted.')[0]}
-                                                            <strong>has been accepted.</strong>
-                                                        </>
-                                                    ) : (
-                                                        notification.message
-                                                    )}
-                                                </p>
-                                                {notification.appointment && (
+                                                
+                                                {formatted.formatted ? (
+                                                    <div style={{ fontSize: '13px', color: '#374151', lineHeight: '1.8' }}>
+                                                        <p style={{ margin: '4px 0', fontWeight: '500' }}>{formatted.greeting}</p>
+                                                        <p style={{ margin: '8px 0', fontWeight: '600', color: '#1f2937' }}>{formatted.mainMessage}</p>
+                                                        
+                                                        {formatted.details && formatted.details.length > 0 && (
+                                                            <div style={{ 
+                                                                marginTop: '12px', 
+                                                                padding: '12px', 
+                                                                background: '#f9fafb', 
+                                                                borderRadius: '8px',
+                                                                border: '1px solid #e5e7eb'
+                                                            }}>
+                                                                {formatted.details.map((detail, idx) => (
+                                                                    <div key={idx} style={{ marginBottom: '6px', fontSize: '13px', lineHeight: '1.6' }}>
+                                                                        <span style={{ marginRight: '6px' }}>{detail.icon}</span>
+                                                                        <strong>{detail.label}:</strong> {detail.value}
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        )}
+                                                        
+                                                        {formatted.notes && (
+                                                            <div style={{
+                                                                marginTop: '12px',
+                                                                padding: '12px',
+                                                                background: '#eff6ff',
+                                                                borderRadius: '8px',
+                                                                fontSize: '13px',
+                                                                color: '#1e40af',
+                                                                fontStyle: 'italic',
+                                                                whiteSpace: 'pre-wrap'
+                                                            }}>
+                                                                {formatted.notes}
+                                                            </div>
+                                                        )}
+                                                        
+                                                        {formatted.declineReason && (
+                                                            <div style={{
+                                                                marginTop: '12px',
+                                                                padding: '12px',
+                                                                background: '#fef2f2',
+                                                                borderRadius: '8px',
+                                                                border: '1px solid #fecaca',
+                                                                fontSize: '13px',
+                                                                color: '#991b1b'
+                                                            }}>
+                                                                <strong>Reason:</strong> {formatted.declineReason}
+                                                            </div>
+                                                        )}
+                                                        
+                                                        {formatted.footer && (
+                                                            <p style={{ margin: '12px 0 8px 0', fontSize: '13px', color: '#6b7280' }}>
+                                                                {formatted.footer}
+                                                            </p>
+                                                        )}
+                                                        
+                                                        <p style={{ margin: '8px 0 0 0', fontSize: '13px', fontWeight: '500', color: '#1f2937' }}>
+                                                            {formatted.closing}
+                                                        </p>
+                                                    </div>
+                                                ) : (
+                                                    <p
+                                                        style={{
+                                                            fontSize: '13px',
+                                                            color: '#6b7280',
+                                                            margin: '4px 0',
+                                                            lineHeight: '1.5',
+                                                        }}
+                                                    >
+                                                        {notification.message.includes('has been accepted.') ? (
+                                                            <>
+                                                                {notification.message.split('has been accepted.')[0]}
+                                                                <strong>has been accepted.</strong>
+                                                            </>
+                                                        ) : (
+                                                            notification.message
+                                                        )}
+                                                    </p>
+                                                )}
+                                                
+                                                {!formatted.formatted && notification.appointment && (
                                                     <div
                                                         style={{
                                                             marginTop: '8px',
@@ -971,6 +1114,74 @@ const AppointmentDetailsModal = ({ appointment, onClose }) => {
 
 // Notification Details Modal Component
 const NotificationDetailsModal = ({ notification, onClose }) => {
+    // Use the formatNotificationMessage function to get formatted layout
+    const formatNotificationMessage = (notification) => {
+        const details = notification.appointmentDetails;
+        
+        const isApproved = notification.type === 'appointment_approved' || 
+                          notification.type === 'appointment_request_approved' ||
+                          notification.title?.toLowerCase().includes('approved') ||
+                          notification.message?.toLowerCase().includes('approved');
+        
+        const isDeclined = notification.type === 'appointment_declined' || 
+                          notification.type === 'appointment_request_declined' ||
+                          notification.title?.toLowerCase().includes('declined') ||
+                          notification.message?.toLowerCase().includes('declined');
+
+        if (isApproved && details) {
+            const appointmentDate = new Date(details.scheduled_start || notification.appointment?.scheduled_start);
+            const appointmentTime = new Date(details.scheduled_start || notification.appointment?.scheduled_start);
+            const patientName = details.patient_name || 'Patient';
+            const facilityName = details.facility_name || 'Facility';
+            const providerName = details.provider_name || 'Provider';
+            const appointmentType = details.appointment_type || notification.appointment?.appointment_type || 'Appointment';
+            
+            return {
+                formatted: true,
+                subject: '✅ Appointment Confirmed - MyHubCares',
+                greeting: `Dear ${patientName},`,
+                mainMessage: 'Your appointment request has been APPROVED!',
+                details: [
+                    { icon: '📅', label: 'Date', value: appointmentDate.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) },
+                    { icon: '⏰', label: 'Time', value: appointmentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) },
+                    { icon: '🏥', label: 'Branch', value: facilityName },
+                    { icon: '👨‍⚕️', label: 'Provider', value: providerName },
+                    { icon: '📝', label: 'Type', value: appointmentType.replace(/_/g, ' ').toUpperCase() }
+                ],
+                notes: details.case_manager_notes || details.notes || null,
+                footer: 'Please arrive 15 minutes before your scheduled time.',
+                closing: 'Thank you for choosing MyHubCares!'
+            };
+        }
+
+        if (isDeclined) {
+            const appointmentDate = details?.scheduled_start || notification.appointment?.scheduled_start || notification.timestamp;
+            const appointmentTime = details?.scheduled_start || notification.appointment?.scheduled_start || notification.timestamp;
+            const patientName = details?.patient_name || 'Patient';
+            const declineReason = notification.decline_reason || 
+                                 (notification.message?.includes('Reason:') ? notification.message.split('Reason:')[1]?.trim() : null) ||
+                                 'No reason provided';
+            
+            return {
+                formatted: true,
+                subject: '❌ Appointment Request Update - MyHubCares',
+                greeting: `Dear ${patientName},`,
+                mainMessage: 'We regret to inform you that your appointment request could not be approved.',
+                details: [
+                    { icon: '📅', label: 'Requested Date', value: new Date(appointmentDate).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) },
+                    { icon: '⏰', label: 'Requested Time', value: new Date(appointmentTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) }
+                ],
+                declineReason: declineReason,
+                footer: 'Please submit a new request with a different date/time or contact us for assistance.',
+                closing: 'Thank you for your understanding.'
+            };
+        }
+
+        return { formatted: false };
+    };
+
+    const formatted = formatNotificationMessage(notification);
+
     return (
         <div style={{
             position: 'fixed',
@@ -1015,42 +1226,80 @@ const NotificationDetailsModal = ({ notification, onClose }) => {
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
                         <Calendar size={20} color="#B82132" />
                         <h3 style={{ margin: 0, fontSize: '18px', color: '#1f2937' }}>
-                            {notification.title}
+                            {formatted.formatted ? formatted.subject : notification.title}
                         </h3>
                     </div>
                     
-                    <div style={{ marginBottom: '16px', padding: '12px', background: '#f9fafb', borderRadius: '8px' }}>
-                        <p style={{ margin: 0, fontSize: '16px', color: '#374151', lineHeight: '1.5' }}>
-                            {notification.message}
-                        </p>
-                    </div>
-
-                    {notification.appointment && (
-                        <div style={{ marginBottom: '16px', padding: '12px', background: '#eff6ff', borderRadius: '8px' }}>
-                            <h4 style={{ margin: '0 0 8px 0', fontSize: '16px', color: '#1e40af' }}>Appointment Information</h4>
-                            <div style={{ fontSize: '14px', color: '#374151' }}>
-                                <div style={{ marginBottom: '4px' }}>
-                                    <strong>Type:</strong> {notification.appointment.appointment_type?.replace('_', ' ').toUpperCase()}
+                    {formatted.formatted ? (
+                        <div style={{ fontSize: '14px', color: '#374151', lineHeight: '1.8' }}>
+                            <p style={{ margin: '8px 0', fontWeight: '500' }}>{formatted.greeting}</p>
+                            <p style={{ margin: '12px 0', fontWeight: '600', color: '#1f2937', fontSize: '16px' }}>{formatted.mainMessage}</p>
+                            
+                            {formatted.details && formatted.details.length > 0 && (
+                                <div style={{ 
+                                    marginTop: '16px', 
+                                    padding: '16px', 
+                                    background: '#f9fafb', 
+                                    borderRadius: '8px',
+                                    border: '1px solid #e5e7eb'
+                                }}>
+                                    {formatted.details.map((detail, idx) => (
+                                        <div key={idx} style={{ marginBottom: '8px', fontSize: '14px', lineHeight: '1.6' }}>
+                                            <span style={{ marginRight: '8px' }}>{detail.icon}</span>
+                                            <strong>{detail.label}:</strong> {detail.value}
+                                        </div>
+                                    ))}
                                 </div>
-                                <div style={{ marginBottom: '4px' }}>
-                                    <strong>Date:</strong> {new Date(notification.appointment.scheduled_start).toLocaleDateString()}
+                            )}
+                            
+                            {formatted.notes && (
+                                <div style={{
+                                    marginTop: '16px',
+                                    padding: '16px',
+                                    background: '#eff6ff',
+                                    borderRadius: '8px',
+                                    fontSize: '14px',
+                                    color: '#1e40af',
+                                    fontStyle: 'italic',
+                                    whiteSpace: 'pre-wrap'
+                                }}>
+                                    {formatted.notes}
                                 </div>
-                                <div style={{ marginBottom: '4px' }}>
-                                    <strong>Time:</strong> {new Date(notification.appointment.scheduled_start).toLocaleTimeString()}
+                            )}
+                            
+                            {formatted.declineReason && (
+                                <div style={{
+                                    marginTop: '16px',
+                                    padding: '16px',
+                                    background: '#fef2f2',
+                                    borderRadius: '8px',
+                                    border: '1px solid #fecaca',
+                                    fontSize: '14px',
+                                    color: '#991b1b'
+                                }}>
+                                    <strong>Reason:</strong> {formatted.declineReason}
                                 </div>
-                            </div>
+                            )}
+                            
+                            {formatted.footer && (
+                                <p style={{ margin: '16px 0 12px 0', fontSize: '14px', color: '#6b7280' }}>
+                                    {formatted.footer}
+                                </p>
+                            )}
+                            
+                            <p style={{ margin: '12px 0 0 0', fontSize: '14px', fontWeight: '500', color: '#1f2937' }}>
+                                {formatted.closing}
+                            </p>
                         </div>
-                    )}
-                    {notification.type === 'appointment_declined' && (
-                        <div style={{ marginBottom: '16px', padding: '12px', background: '#fef2f2', borderRadius: '8px', border: '1px solid #fecaca' }}>
-                            <h4 style={{ margin: '0 0 8px 0', fontSize: '16px', color: '#991b1b' }}>Decline Reason</h4>
-                            <p style={{ margin: 0, fontSize: '14px', color: '#991b1b' }}>
-                                {notification.decline_reason || (notification.message?.includes('Reason:') ? notification.message.split('Reason:')[1]?.trim() : null) || 'No reason provided'}
+                    ) : (
+                        <div style={{ marginBottom: '16px', padding: '12px', background: '#f9fafb', borderRadius: '8px' }}>
+                            <p style={{ margin: 0, fontSize: '16px', color: '#374151', lineHeight: '1.5' }}>
+                                {notification.message}
                             </p>
                         </div>
                     )}
 
-                    <div style={{ fontSize: '12px', color: '#6b7280', textAlign: 'right' }}>
+                    <div style={{ fontSize: '12px', color: '#6b7280', textAlign: 'right', marginTop: '20px' }}>
                         Received: {new Date(notification.timestamp).toLocaleString()}
                     </div>
                 </div>

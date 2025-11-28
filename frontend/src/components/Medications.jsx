@@ -49,10 +49,17 @@ const Medications = ({ socket }) => {
 
   const [refillForm, setRefillForm] = useState({
     medication_id: '',
+    prescription_id: '',
+    regimen_id: '',
     quantity: '',
-    pickup_date: '',
+    unit: 'tablets',
+    preferred_pickup_date: '',
+    preferred_pickup_time: '',
     facility_id: '',
-    notes: ''
+    patient_notes: '',
+    remaining_pill_count: '',
+    pills_per_day: '1',
+    kulang_explanation: ''
   });
 
   const [declineReason, setDeclineReason] = useState('');
@@ -253,12 +260,50 @@ const Medications = ({ socket }) => {
         return;
       }
       
-      if (!refillForm.medication_id || !refillForm.quantity || !refillForm.pickup_date || !refillForm.facility_id) {
+      // Validate required fields
+      if (!refillForm.medication_id || !refillForm.quantity || !refillForm.preferred_pickup_date || 
+          !refillForm.facility_id || !refillForm.remaining_pill_count) {
         setToast({
-          message: 'All fields are required',
+          message: 'Please fill in all required fields (medication, quantity, pickup date, facility, and remaining pill count)',
           type: 'error',
         });
         return;
+      }
+
+      // Validate remaining_pill_count is a number
+      const remainingPills = parseInt(refillForm.remaining_pill_count);
+      if (isNaN(remainingPills) || remainingPills < 0) {
+        setToast({
+          message: 'Remaining pill count must be a valid number',
+          type: 'error',
+        });
+        return;
+      }
+
+      // Validate preferred_pickup_date is future date
+      const pickupDate = new Date(refillForm.preferred_pickup_date);
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      tomorrow.setHours(0, 0, 0, 0);
+      
+      if (pickupDate < tomorrow) {
+        setToast({
+          message: 'Pickup date must be at least one day in advance',
+          type: 'error',
+        });
+        return;
+      }
+
+      // Validate preferred_pickup_time is hourly (if provided)
+      if (refillForm.preferred_pickup_time) {
+        const timeParts = refillForm.preferred_pickup_time.split(':');
+        if (timeParts.length === 2 && parseInt(timeParts[1]) !== 0) {
+          setToast({
+            message: 'Pickup time must be on the hour (e.g., 09:00, 10:00)',
+            type: 'error',
+          });
+          return;
+        }
       }
 
       const token = localStorage.getItem('token');
@@ -270,8 +315,19 @@ const Medications = ({ socket }) => {
           ...(token && { Authorization: `Bearer ${token}` }),
         },
         body: JSON.stringify({
-          ...refillForm,
-          patient_id: patientId
+          patient_id: patientId,
+          prescription_id: refillForm.prescription_id || null,
+          regimen_id: refillForm.regimen_id || null,
+          medication_id: refillForm.medication_id,
+          facility_id: refillForm.facility_id,
+          quantity: parseInt(refillForm.quantity),
+          unit: refillForm.unit,
+          preferred_pickup_date: refillForm.preferred_pickup_date,
+          preferred_pickup_time: refillForm.preferred_pickup_time || null,
+          patient_notes: refillForm.patient_notes || null,
+          remaining_pill_count: remainingPills,
+          pills_per_day: parseInt(refillForm.pills_per_day) || 1,
+          kulang_explanation: refillForm.kulang_explanation || null
         }),
       });
 
@@ -286,10 +342,17 @@ const Medications = ({ socket }) => {
         setShowRefillModal(false);
         setRefillForm({
           medication_id: '',
+          prescription_id: '',
+          regimen_id: '',
           quantity: '',
-          pickup_date: '',
+          unit: 'tablets',
+          preferred_pickup_date: '',
+          preferred_pickup_time: '',
           facility_id: '',
-          notes: ''
+          patient_notes: '',
+          remaining_pill_count: '',
+          pills_per_day: '1',
+          kulang_explanation: ''
         });
         fetchRefillRequests();
       } else {
@@ -1123,10 +1186,17 @@ const Medications = ({ socket }) => {
                   setSelectedMedication(null);
                   setRefillForm({
                     medication_id: '',
+                    prescription_id: '',
+                    regimen_id: '',
                     quantity: '',
-                    pickup_date: '',
+                    unit: 'tablets',
+                    preferred_pickup_date: '',
+                    preferred_pickup_time: '',
                     facility_id: '',
-                    notes: ''
+                    patient_notes: '',
+                    remaining_pill_count: '',
+                    pills_per_day: '1',
+                    kulang_explanation: ''
                   });
                 }}
                 style={{
@@ -1160,16 +1230,106 @@ const Medications = ({ socket }) => {
                 />
               </div>
 
+              {/* Remaining Pill Count - REQUIRED */}
+              <div>
+                <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px', fontWeight: 500 }}>
+                  Remaining Pill Count * <span style={{ color: '#dc3545' }}>(Required)</span>
+                </label>
+                <input
+                  type="number"
+                  value={refillForm.remaining_pill_count}
+                  onChange={(e) => {
+                    const count = parseInt(e.target.value) || 0;
+                    setRefillForm({ 
+                      ...refillForm, 
+                      remaining_pill_count: e.target.value,
+                      is_eligible_for_refill: count <= 10
+                    });
+                  }}
+                  placeholder="e.g., 8"
+                  min="0"
+                  required
+                  style={{
+                    width: '100%',
+                    padding: '10px',
+                    border: '1px solid #ced4da',
+                    borderRadius: '4px',
+                    fontSize: '14px',
+                  }}
+                />
+                <small style={{ color: '#6c757d', fontSize: '12px' }}>
+                  {refillForm.remaining_pill_count && parseInt(refillForm.remaining_pill_count) <= 10 
+                    ? '✅ Eligible for refill (≤10 pills)' 
+                    : '⚠️ Not eligible for refill (>10 pills remaining)'}
+                </small>
+              </div>
+
+              {/* Pills Per Day */}
+              <div>
+                <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px', fontWeight: 500 }}>
+                  Pills Per Day *
+                </label>
+                <input
+                  type="number"
+                  value={refillForm.pills_per_day}
+                  onChange={(e) => setRefillForm({ ...refillForm, pills_per_day: e.target.value })}
+                  placeholder="e.g., 1"
+                  min="1"
+                  required
+                  style={{
+                    width: '100%',
+                    padding: '10px',
+                    border: '1px solid #ced4da',
+                    borderRadius: '4px',
+                    fontSize: '14px',
+                  }}
+                />
+              </div>
+
+              {/* Pill Status Explanation (if kulang) */}
+              {refillForm.remaining_pill_count && (() => {
+                const remaining = parseInt(refillForm.remaining_pill_count) || 0;
+                const pillsPerDay = parseInt(refillForm.pills_per_day) || 1;
+                const daysSinceLastPickup = 30; // This should be calculated from last pickup
+                const expectedPills = daysSinceLastPickup * pillsPerDay;
+                const isKulang = remaining < expectedPills - 5;
+                
+                return isKulang ? (
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px', fontWeight: 500 }}>
+                      Explanation for Low Pill Count * <span style={{ color: '#dc3545' }}>(Required)</span>
+                    </label>
+                    <textarea
+                      value={refillForm.kulang_explanation}
+                      onChange={(e) => setRefillForm({ ...refillForm, kulang_explanation: e.target.value })}
+                      placeholder="Please explain why you have fewer pills than expected..."
+                      required
+                      style={{
+                        width: '100%',
+                        padding: '10px',
+                        border: '1px solid #ced4da',
+                        borderRadius: '4px',
+                        fontSize: '14px',
+                        minHeight: '80px',
+                        resize: 'vertical',
+                      }}
+                    />
+                  </div>
+                ) : null;
+              })()}
+
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
                 <div>
                   <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px', fontWeight: 500 }}>
-                    Quantity *
+                    Quantity Requested *
                   </label>
                   <input
                     type="number"
                     value={refillForm.quantity}
                     onChange={(e) => setRefillForm({ ...refillForm, quantity: e.target.value })}
                     placeholder="e.g., 30"
+                    min="1"
+                    required
                     style={{
                       width: '100%',
                       padding: '10px',
@@ -1182,13 +1342,43 @@ const Medications = ({ socket }) => {
 
                 <div>
                   <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px', fontWeight: 500 }}>
-                    Pickup Date *
+                    Unit *
+                  </label>
+                  <select
+                    value={refillForm.unit}
+                    onChange={(e) => setRefillForm({ ...refillForm, unit: e.target.value })}
+                    style={{
+                      width: '100%',
+                      padding: '10px',
+                      border: '1px solid #ced4da',
+                      borderRadius: '4px',
+                      fontSize: '14px',
+                    }}
+                  >
+                    <option value="tablets">Tablets</option>
+                    <option value="capsules">Capsules</option>
+                    <option value="ml">ML</option>
+                    <option value="vials">Vials</option>
+                    <option value="units">Units</option>
+                  </select>
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px', fontWeight: 500 }}>
+                    Preferred Pickup Date * <span style={{ color: '#dc3545' }}>(Future only)</span>
                   </label>
                   <input
                     type="date"
-                    value={refillForm.pickup_date}
-                    onChange={(e) => setRefillForm({ ...refillForm, pickup_date: e.target.value })}
-                    min={new Date().toISOString().split('T')[0]}
+                    value={refillForm.preferred_pickup_date}
+                    onChange={(e) => setRefillForm({ ...refillForm, preferred_pickup_date: e.target.value })}
+                    min={(() => {
+                      const tomorrow = new Date();
+                      tomorrow.setDate(tomorrow.getDate() + 1);
+                      return tomorrow.toISOString().split('T')[0];
+                    })()}
+                    required
                     style={{
                       width: '100%',
                       padding: '10px',
@@ -1197,6 +1387,38 @@ const Medications = ({ socket }) => {
                       fontSize: '14px',
                     }}
                   />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px', fontWeight: 500 }}>
+                    Preferred Pickup Time <span style={{ color: '#6c757d' }}>(Hourly only)</span>
+                  </label>
+                  <input
+                    type="time"
+                    value={refillForm.preferred_pickup_time}
+                    onChange={(e) => {
+                      // Ensure time is on the hour
+                      const time = e.target.value;
+                      const [hours, minutes] = time.split(':');
+                      if (minutes !== '00' && minutes !== '') {
+                        setToast({
+                          message: 'Time must be on the hour (e.g., 09:00, 10:00)',
+                          type: 'error',
+                        });
+                        return;
+                      }
+                      setRefillForm({ ...refillForm, preferred_pickup_time: time });
+                    }}
+                    step="3600"
+                    style={{
+                      width: '100%',
+                      padding: '10px',
+                      border: '1px solid #ced4da',
+                      borderRadius: '4px',
+                      fontSize: '14px',
+                    }}
+                  />
+                  <small style={{ color: '#6c757d', fontSize: '12px' }}>Only hourly slots (e.g., 09:00, 10:00)</small>
                 </div>
               </div>
 
@@ -1224,11 +1446,11 @@ const Medications = ({ socket }) => {
 
               <div>
                 <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px', fontWeight: 500 }}>
-                  Notes
+                  Patient Notes
                 </label>
                 <textarea
-                  value={refillForm.notes}
-                  onChange={(e) => setRefillForm({ ...refillForm, notes: e.target.value })}
+                  value={refillForm.patient_notes}
+                  onChange={(e) => setRefillForm({ ...refillForm, patient_notes: e.target.value })}
                   placeholder="Any additional notes or special instructions..."
                   style={{
                     width: '100%',
@@ -1250,10 +1472,17 @@ const Medications = ({ socket }) => {
                   setSelectedMedication(null);
                   setRefillForm({
                     medication_id: '',
+                    prescription_id: '',
+                    regimen_id: '',
                     quantity: '',
-                    pickup_date: '',
+                    unit: 'tablets',
+                    preferred_pickup_date: '',
+                    preferred_pickup_time: '',
                     facility_id: '',
-                    notes: ''
+                    patient_notes: '',
+                    remaining_pill_count: '',
+                    pills_per_day: '1',
+                    kulang_explanation: ''
                   });
                 }}
                 style={{

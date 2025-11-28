@@ -53,6 +53,83 @@ router.get('/', async (req, res) => {
   }
 });
 
+/* ---------------- GET VISITS BY PATIENT ID ---------------- */
+router.get('/patient/:patientId', authenticateToken, async (req, res) => {
+  try {
+    const { patientId } = req.params;
+
+    // Check permissions
+    if (req.user.role === 'patient') {
+      // Patients can only view their own visits
+      const [patientCheck] = await db.query(
+        "SELECT patient_id FROM patients WHERE (created_by = ? OR email = (SELECT email FROM users WHERE user_id = ?)) AND patient_id = ?",
+        [req.user.user_id, req.user.user_id, patientId]
+      );
+      
+      if (patientCheck.length === 0) {
+        return res.status(403).json({
+          success: false,
+          error: 'Access denied. You can only view your own visit history.'
+        });
+      }
+    } else if (!['admin', 'physician', 'nurse', 'case_manager'].includes(req.user.role)) {
+      return res.status(403).json({
+        success: false,
+        error: 'Access denied'
+      });
+    }
+
+    // Get all visits for this patient
+    const [visits] = await db.query(
+      `
+      SELECT cv.*, 
+             CONCAT(p.first_name,' ',p.last_name) AS patientName,
+             u.full_name AS providerName,
+             f.facility_name AS facilityName
+      FROM clinical_visits cv
+      JOIN patients p ON cv.patient_id = p.patient_id
+      LEFT JOIN users u ON cv.provider_id = u.user_id
+      LEFT JOIN facilities f ON cv.facility_id = f.facility_id
+      WHERE cv.patient_id = ?
+      ORDER BY cv.visit_date DESC, cv.created_at DESC
+    `,
+      [patientId]
+    );
+
+    // For each visit, get related vital signs, diagnoses, and procedures
+    for (let visit of visits) {
+      const [vitals] = await db.query(
+        'SELECT * FROM vital_signs WHERE visit_id = ?',
+        [visit.visit_id]
+      );
+      const [diagnoses] = await db.query(
+        'SELECT * FROM diagnoses WHERE visit_id = ?',
+        [visit.visit_id]
+      );
+      const [procedures] = await db.query(
+        'SELECT * FROM procedures WHERE visit_id = ?',
+        [visit.visit_id]
+      );
+
+      visit.vital_signs = vitals;
+      visit.diagnoses = diagnoses;
+      visit.procedures = procedures;
+    }
+
+    res.json({
+      success: true,
+      data: visits,
+      count: visits.length
+    });
+  } catch (err) {
+    console.error('Error fetching patient visits:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch patient visit history'
+    });
+  }
+});
+
 /* ---------------- GET SINGLE VISIT + RELATED ---------------- */
 router.get('/:id', async (req, res) => {
   try {
