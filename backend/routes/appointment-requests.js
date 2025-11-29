@@ -669,15 +669,36 @@ router.post('/:id/approve', authenticateToken, async (req, res) => {
       scheduledEnd.toISOString()
     );
 
+    console.log('🔍 Availability check result:', {
+      available: availabilityCheck.available,
+      requiresSlots: availabilityCheck.requires_slots,
+      availableSlotsCount: availabilityCheck.available_slots?.length || 0,
+      conflictsCount: availabilityCheck.conflicts?.length || 0,
+      doctorConflictsCount: availabilityCheck.doctor_conflicts?.length || 0
+    });
+
     if (!availabilityCheck.available) {
+      // Provide more detailed error message
+      let errorMessage = 'The requested time slot is not available';
+      if (availabilityCheck.conflicts && availabilityCheck.conflicts.length > 0) {
+        errorMessage = 'The requested time slot conflicts with an existing appointment';
+      } else if (availabilityCheck.doctor_conflicts && availabilityCheck.doctor_conflicts.length > 0) {
+        errorMessage = 'The requested provider has a conflict on this date';
+      } else if (availabilityCheck.requires_slots && (!availabilityCheck.available_slots || availabilityCheck.available_slots.length === 0)) {
+        errorMessage = 'No available slots found for the requested time. Please ensure availability slots are created for this date.';
+      }
+      
       return res.status(400).json({
         success: false,
-        message: 'The requested time slot is not available',
-        conflicts: availabilityCheck.conflicts
+        message: errorMessage,
+        conflicts: availabilityCheck.conflicts,
+        doctor_conflicts: availabilityCheck.doctor_conflicts,
+        requires_slots: availabilityCheck.requires_slots,
+        available_slots_count: availabilityCheck.available_slots?.length || 0
       });
     }
 
-    const { review_notes } = req.body;
+    const { review_notes, notify_provider } = req.body;
 
     // Start transaction
     await db.query('START TRANSACTION');
@@ -805,7 +826,33 @@ router.post('/:id/approve', authenticateToken, async (req, res) => {
 
         console.log(`✅ Booked appointment ${appointment_id} into slot ${slot.slot_id}`);
       } else {
-        console.log(`⚠️ No available slot found for appointment ${appointment_id}, appointment created without slot assignment`);
+        // No slot found - this is OK if slots were truncated or don't exist yet
+        // The appointment is still created successfully, just without a slot assignment
+        console.log(`⚠️ No available slot found for appointment ${appointment_id}. This is OK if slots were truncated or not yet created. Appointment created without slot assignment.`);
+        
+        // If provider_id was requested but not set, try to find one from doctor_assignments
+        if (!request.provider_id) {
+          const [assignments] = await db.query(`
+            SELECT doctor_id
+            FROM doctor_assignments
+            WHERE facility_id = ?
+              AND assignment_date = ?
+              AND start_time <= ?
+              AND end_time >= ?
+            LIMIT 1
+          `, [request.facility_id, slotDate, startTime, endTime]);
+          
+          if (assignments.length > 0) {
+            const providerId = assignments[0].doctor_id;
+            await db.query(`
+              UPDATE appointments
+              SET provider_id = ?
+              WHERE appointment_id = ?
+            `, [providerId, appointment_id]);
+            request.provider_id = providerId;
+            console.log(`✅ Assigned provider ${providerId} from doctor_assignments`);
+          }
+        }
       }
 
       // Update appointment status to confirmed since it's approved
@@ -933,18 +980,19 @@ router.post('/:id/approve', authenticateToken, async (req, res) => {
       console.error('Error sending case manager notification (non-fatal):', notifError);
     }
 
-    // Notify physicians when appointment is approved
-    try {
-      // Get the appointment details
-      const [appointmentData] = await db.query(`
-        SELECT a.provider_id, a.scheduled_start, a.scheduled_end, a.appointment_type,
-               CONCAT(p.first_name, ' ', p.last_name) AS patient_name,
-               f.facility_name, a.facility_id
-        FROM appointments a
-        LEFT JOIN patients p ON a.patient_id = p.patient_id
-        LEFT JOIN facilities f ON a.facility_id = f.facility_id
-        WHERE a.appointment_id = ?
-      `, [appointment_id]);
+    // Notify physicians when appointment is approved (only if notify_provider is true)
+    if (notify_provider) {
+      try {
+        // Get the appointment details
+        const [appointmentData] = await db.query(`
+          SELECT a.provider_id, a.scheduled_start, a.scheduled_end, a.appointment_type,
+                 CONCAT(p.first_name, ' ', p.last_name) AS patient_name,
+                 f.facility_name, a.facility_id
+          FROM appointments a
+          LEFT JOIN patients p ON a.patient_id = p.patient_id
+          LEFT JOIN facilities f ON a.facility_id = f.facility_id
+          WHERE a.appointment_id = ?
+        `, [appointment_id]);
 
       if (appointmentData.length > 0) {
         const appointment = appointmentData[0];
@@ -1235,9 +1283,12 @@ router.post('/:id/approve', authenticateToken, async (req, res) => {
           }
         }
       }
-    } catch (physicianNotifError) {
-      console.error('Error sending physician notification (non-fatal):', physicianNotifError);
-      console.error('Error stack:', physicianNotifError.stack);
+      } catch (physicianNotifError) {
+        console.error('Error sending physician notification (non-fatal):', physicianNotifError);
+        console.error('Error stack:', physicianNotifError.stack);
+      }
+    } else {
+      console.log('📧 Provider notification disabled (notify_provider = false)');
     }
 
     // Log audit

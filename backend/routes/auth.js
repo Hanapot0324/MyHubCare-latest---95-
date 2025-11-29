@@ -8,8 +8,8 @@ import { logAudit, getClientIp } from "../utils/auditLogger.js";
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || "supersecretkey";
 
-// Middleware to verify JWT token
-export const authenticateToken = (req, res, next) => {
+// Middleware to verify JWT token with session validation
+export const authenticateToken = async (req, res, next) => {
   console.log('=== authenticateToken middleware ===');
   console.log('Request path:', req.path);
   console.log('Request method:', req.method);
@@ -25,17 +25,141 @@ export const authenticateToken = (req, res, next) => {
   }
 
   console.log('Token found, verifying...');
-  jwt.verify(token, JWT_SECRET, (err, user) => {
-    if (err) {
-      console.error('=== AUTH ERROR: Token verification failed ===');
-      console.error('Error:', err.message);
-      console.error('Error name:', err.name);
-      return res.status(403).json({ success: false, message: 'Invalid or expired token' });
+  
+  try {
+    // Verify JWT token signature and expiration
+    jwt.verify(token, JWT_SECRET, async (err, user) => {
+      if (err) {
+        console.error('=== AUTH ERROR: Token verification failed ===');
+        console.error('Error:', err.message);
+        console.error('Error name:', err.name);
+        return res.status(403).json({ success: false, message: 'Invalid or expired token' });
+      }
+
+      // Validate session against auth_sessions table
+      const token_hash = await bcrypt.hash(token, 10);
+      const [sessions] = await db.query(
+        `SELECT session_id, user_id, is_active, expires_at, revoked_at 
+         FROM auth_sessions 
+         WHERE user_id = ? AND is_active = TRUE AND expires_at > NOW() AND revoked_at IS NULL
+         ORDER BY issued_at DESC
+         LIMIT 1`,
+        [user.user_id]
+      );
+
+      if (sessions.length === 0) {
+        console.error('=== AUTH ERROR: No active session found ===');
+        return res.status(403).json({ 
+          success: false, 
+          message: 'Session expired or revoked. Please login again.' 
+        });
+      }
+
+      const session = sessions[0];
+      
+      // Double-check session expiration
+      if (new Date(session.expires_at) < new Date()) {
+        // Mark session as inactive
+        await db.query(
+          'UPDATE auth_sessions SET is_active = FALSE WHERE session_id = ?',
+          [session.session_id]
+        );
+        return res.status(403).json({ 
+          success: false, 
+          message: 'Session expired. Please login again.' 
+        });
+      }
+
+      console.log('Token verified successfully. User ID:', user.user_id);
+      req.user = user;
+      req.session_id = session.session_id;
+      next();
+    });
+  } catch (error) {
+    console.error('=== AUTH ERROR: Session validation error ===');
+    console.error('Error:', error.message);
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Authentication error. Please try again.' 
+    });
+  }
+};
+
+/**
+ * Permission-Based Authorization Middleware
+ * 
+ * HOW IT WORKS:
+ * 1. This middleware checks if the authenticated user has a specific permission
+ * 2. It queries the database following this flow:
+ *    - user_roles → Get all roles assigned to the user
+ *    - role_permissions → Get all permissions granted to those roles
+ *    - permissions → Check if the required permission_code exists
+ * 3. If user has the permission through any of their roles, access is granted
+ * 4. If not, returns 403 Forbidden
+ * 
+ * USAGE:
+ * router.get('/patients', authenticateToken, checkPermission('patients.view'), async (req, res) => {
+ *   // Route handler
+ * });
+ * 
+ * @param {string} permissionCode - The permission_code to check (e.g., 'patients.create', 'users.delete')
+ * @returns {Function} Express middleware function
+ */
+export const checkPermission = (permissionCode) => {
+  return async (req, res, next) => {
+    try {
+      if (!req.user || !req.user.user_id) {
+        return res.status(401).json({ 
+          success: false, 
+          message: 'Authentication required' 
+        });
+      }
+
+      // Query: user_roles → role_permissions → permissions
+      const [permissions] = await db.query(
+        `SELECT DISTINCT p.permission_code, p.permission_name, p.module, p.action
+         FROM permissions p
+         INNER JOIN role_permissions rp ON p.permission_id = rp.permission_id
+         INNER JOIN user_roles ur ON rp.role_id = ur.role_id
+         WHERE ur.user_id = ? AND p.permission_code = ?`,
+        [req.user.user_id, permissionCode]
+      );
+
+      if (permissions.length === 0) {
+        // Log unauthorized access attempt
+        await logAudit({
+          user_id: req.user.user_id,
+          user_name: req.user.full_name || req.user.username || 'Unknown',
+          user_role: req.user.role || 'unknown',
+          action: 'ACCESS_DENIED',
+          module: 'Authorization',
+          entity_type: 'permission',
+          entity_id: permissionCode,
+          record_id: permissionCode,
+          change_summary: `Unauthorized access attempt: Missing permission '${permissionCode}'`,
+          ip_address: getClientIp(req),
+          user_agent: req.headers['user-agent'] || 'unknown',
+          status: 'failed',
+          error_message: `Permission '${permissionCode}' required`,
+        });
+
+        return res.status(403).json({ 
+          success: false, 
+          message: `Access denied. Permission '${permissionCode}' required.` 
+        });
+      }
+
+      // Permission granted - attach permission info to request
+      req.permission = permissions[0];
+      next();
+    } catch (error) {
+      console.error('Permission check error:', error);
+      return res.status(500).json({ 
+        success: false, 
+        message: 'Authorization check failed' 
+      });
     }
-    console.log('Token verified successfully. User ID:', user.user_id);
-    req.user = user;
-    next();
-  });
+  };
 };
 
 // Generate UIC from patient data

@@ -12,6 +12,9 @@ import {
   User,
   Clock,
   Activity,
+  Package,
+  History,
+  AlertTriangle,
 } from 'lucide-react';
 import { API_BASE_URL } from '../config/api.js';
 
@@ -23,11 +26,15 @@ const ARTRegimenManagement = () => {
   const [filterStatus, setFilterStatus] = useState('all');
   const [showModal, setShowModal] = useState(false);
   const [selectedRegimen, setSelectedRegimen] = useState(null);
-  const [modalMode, setModalMode] = useState('add'); // 'add', 'view', 'stop'
+  const [modalMode, setModalMode] = useState('add'); // 'add', 'view', 'stop', 'dispense', 'missed-dose'
   const [toast, setToast] = useState(null);
   const [drugItems, setDrugItems] = useState([{}]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [showDispenseModal, setShowDispenseModal] = useState(false);
+  const [showMissedDoseModal, setShowMissedDoseModal] = useState(false);
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [regimenHistory, setRegimenHistory] = useState([]);
 
   // Fetch data from API
   useEffect(() => {
@@ -127,9 +134,9 @@ const ARTRegimenManagement = () => {
     // Apply search filter
     if (searchTerm) {
       filtered = filtered.filter((regimen) => {
-        const patient = patients.find((p) => p.id === regimen.patientId);
+        const patient = patients.find((p) => p.patient_id === regimen.patient_id);
         const patientName = patient
-          ? `${patient.firstName} ${patient.lastName}`.toLowerCase()
+          ? `${patient.first_name} ${patient.last_name}`.toLowerCase()
           : '';
         return patientName.includes(searchTerm.toLowerCase());
       });
@@ -228,6 +235,133 @@ const ARTRegimenManagement = () => {
       setSelectedRegimen(regimen);
       setModalMode('stop');
       setShowModal(true);
+    }
+  };
+
+  // Show dispense pills modal
+  const handleShowDispenseModal = (regimen) => {
+    setSelectedRegimen(regimen);
+    setShowDispenseModal(true);
+  };
+
+  // Show missed dose modal
+  const handleShowMissedDoseModal = (regimen) => {
+    setSelectedRegimen(regimen);
+    setShowMissedDoseModal(true);
+  };
+
+  // Show history modal
+  const handleShowHistoryModal = async (regimenId) => {
+    const token = localStorage.getItem('token');
+    try {
+      const response = await fetch(`${API_BASE_URL}/art-regimens/${regimenId}/history`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const data = await response.json();
+      if (response.ok && data.success) {
+        setRegimenHistory(data.data || []);
+        setShowHistoryModal(true);
+      } else {
+        setToast({
+          message: 'Failed to load regimen history',
+          type: 'error',
+        });
+      }
+    } catch (err) {
+      console.error('Error fetching history:', err);
+      setToast({
+        message: 'Failed to load regimen history',
+        type: 'error',
+      });
+    }
+  };
+
+  // Dispense pills
+  const handleDispensePills = async (formData) => {
+    const token = localStorage.getItem('token');
+    setError(null);
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/art-regimens/${selectedRegimen.regimen_id}/dispense`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            regimen_drug_id: formData.regimen_drug_id,
+            quantity_dispensed: parseInt(formData.quantity_dispensed),
+          }),
+        }
+      );
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        setToast({
+          message: 'Pills dispensed successfully',
+          type: 'success',
+        });
+        setShowDispenseModal(false);
+        fetchData(); // Refresh data
+      } else {
+        throw new Error(data.message || 'Failed to dispense pills');
+      }
+    } catch (err) {
+      console.error('Error dispensing pills:', err);
+      setError(err.message);
+      setToast({
+        message: err.message || 'Failed to dispense pills',
+        type: 'error',
+      });
+    }
+  };
+
+  // Record missed dose
+  const handleRecordMissedDose = async (formData) => {
+    const token = localStorage.getItem('token');
+    setError(null);
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/art-regimens/${selectedRegimen.regimen_id}/missed-dose`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            regimen_drug_id: formData.regimen_drug_id,
+            missed_date: formData.missed_date || new Date().toISOString().split('T')[0],
+            reason: formData.reason || null,
+          }),
+        }
+      );
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        setToast({
+          message: 'Missed dose recorded successfully',
+          type: 'success',
+        });
+        setShowMissedDoseModal(false);
+        fetchData(); // Refresh data
+      } else {
+        throw new Error(data.message || 'Failed to record missed dose');
+      }
+    } catch (err) {
+      console.error('Error recording missed dose:', err);
+      setError(err.message);
+      setToast({
+        message: err.message || 'Failed to record missed dose',
+        type: 'error',
+      });
     }
   };
 
@@ -385,7 +519,7 @@ const ARTRegimenManagement = () => {
 
       return (
         <div
-          key={regimen.id}
+          key={regimen.regimen_id}
           style={{
             background: 'white',
             padding: '20px',
@@ -480,25 +614,87 @@ const ARTRegimenManagement = () => {
                     borderRadius: '4px',
                     cursor: 'pointer',
                     fontSize: '14px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
                   }}
                 >
                   View
                 </button>
                 {regimen.status === 'active' && (
-                  <button
-                    onClick={() => handleShowStopRegimenModal(regimen.regimen_id)}
-                    style={{
-                      padding: '6px 12px',
-                      background: '#ffc107',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: '4px',
-                      cursor: 'pointer',
-                      fontSize: '14px',
-                    }}
-                  >
-                    Stop/Change
-                  </button>
+                  <>
+                    <button
+                      onClick={() => handleShowDispenseModal(regimen)}
+                      style={{
+                        padding: '6px 12px',
+                        background: '#6f42c1',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '14px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                      }}
+                      title="Dispense Pills"
+                    >
+                      <Package size={14} />
+                      Dispense
+                    </button>
+                    <button
+                      onClick={() => handleShowMissedDoseModal(regimen)}
+                      style={{
+                        padding: '6px 12px',
+                        background: '#dc3545',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '14px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                      }}
+                      title="Record Missed Dose"
+                    >
+                      <AlertTriangle size={14} />
+                      Missed
+                    </button>
+                    <button
+                      onClick={() => handleShowHistoryModal(regimen.regimen_id)}
+                      style={{
+                        padding: '6px 12px',
+                        background: '#17a2b8',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '14px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                      }}
+                      title="View History"
+                    >
+                      <History size={14} />
+                      History
+                    </button>
+                    <button
+                      onClick={() => handleShowStopRegimenModal(regimen.regimen_id)}
+                      style={{
+                        padding: '6px 12px',
+                        background: '#ffc107',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '14px',
+                      }}
+                    >
+                      Stop/Change
+                    </button>
+                  </>
                 )}
               </div>
             </div>
@@ -653,6 +849,32 @@ const ARTRegimenManagement = () => {
           onStop={handleStopRegimen}
           onAddDrug={handleAddDrugField}
           onRemoveDrug={handleRemoveDrugField}
+        />
+      )}
+
+      {/* Dispense Pills Modal */}
+      {showDispenseModal && selectedRegimen && (
+        <DispensePillsModal
+          regimen={selectedRegimen}
+          onClose={() => setShowDispenseModal(false)}
+          onDispense={handleDispensePills}
+        />
+      )}
+
+      {/* Missed Dose Modal */}
+      {showMissedDoseModal && selectedRegimen && (
+        <MissedDoseModal
+          regimen={selectedRegimen}
+          onClose={() => setShowMissedDoseModal(false)}
+          onRecord={handleRecordMissedDose}
+        />
+      )}
+
+      {/* History Modal */}
+      {showHistoryModal && (
+        <HistoryModal
+          history={regimenHistory}
+          onClose={() => setShowHistoryModal(false)}
         />
       )}
 
@@ -1655,6 +1877,559 @@ const RegimenModal = ({
             </button>
           </div>
         </form>
+      </div>
+    </div>
+  );
+};
+
+// Dispense Pills Modal Component
+const DispensePillsModal = ({ regimen, onClose, onDispense }) => {
+  const [formData, setFormData] = useState({
+    regimen_drug_id: '',
+    quantity_dispensed: '',
+  });
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (!formData.regimen_drug_id || !formData.quantity_dispensed || parseInt(formData.quantity_dispensed) <= 0) {
+      alert('Please select a drug and enter a valid quantity');
+      return;
+    }
+    onDispense(formData);
+  };
+
+  const handleChange = (e) => {
+    setFormData({
+      ...formData,
+      [e.target.name]: e.target.value,
+    });
+  };
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        background: 'rgba(0,0,0,0.5)',
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        zIndex: 1000,
+      }}
+    >
+      <div
+        style={{
+          background: 'white',
+          padding: '30px',
+          borderRadius: '8px',
+          width: '90%',
+          maxWidth: '500px',
+          boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: '20px',
+          }}
+        >
+          <h2 style={{ margin: 0 }}>Dispense ART Pills</h2>
+          <button
+            onClick={onClose}
+            style={{
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              padding: '5px',
+              borderRadius: '4px',
+            }}
+          >
+            <X size={24} color="#6c757d" />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit}>
+          <div style={{ marginBottom: '15px' }}>
+            <label
+              style={{
+                display: 'block',
+                marginBottom: '5px',
+                fontWeight: 'bold',
+              }}
+            >
+              Select Drug <span style={{ color: 'red' }}>*</span>
+            </label>
+            <select
+              name="regimen_drug_id"
+              value={formData.regimen_drug_id}
+              onChange={handleChange}
+              required
+              style={{
+                width: '100%',
+                padding: '8px',
+                border: '1px solid #ced4da',
+                borderRadius: '4px',
+              }}
+            >
+              <option value="">Select a drug</option>
+              {regimen.drugs && regimen.drugs.map((drug) => (
+                <option key={drug.regimen_drug_id} value={drug.regimen_drug_id}>
+                  {drug.drug_name} - {drug.dosage} ({drug.pills_remaining || 0} remaining)
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div style={{ marginBottom: '20px' }}>
+            <label
+              style={{
+                display: 'block',
+                marginBottom: '5px',
+                fontWeight: 'bold',
+              }}
+            >
+              Quantity to Dispense <span style={{ color: 'red' }}>*</span>
+            </label>
+            <input
+              type="number"
+              name="quantity_dispensed"
+              value={formData.quantity_dispensed}
+              onChange={handleChange}
+              min="1"
+              required
+              placeholder="Enter quantity"
+              style={{
+                width: '100%',
+                padding: '8px',
+                border: '1px solid #ced4da',
+                borderRadius: '4px',
+              }}
+            />
+          </div>
+
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'flex-end',
+              gap: '10px',
+            }}
+          >
+            <button
+              type="button"
+              onClick={onClose}
+              style={{
+                padding: '8px 16px',
+                background: '#6c757d',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              style={{
+                padding: '8px 16px',
+                background: '#6f42c1',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+              }}
+            >
+              Dispense Pills
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+// Missed Dose Modal Component
+const MissedDoseModal = ({ regimen, onClose, onRecord }) => {
+  const [formData, setFormData] = useState({
+    regimen_drug_id: '',
+    missed_date: new Date().toISOString().split('T')[0],
+    reason: '',
+  });
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (!formData.regimen_drug_id) {
+      alert('Please select a drug');
+      return;
+    }
+    onRecord(formData);
+  };
+
+  const handleChange = (e) => {
+    setFormData({
+      ...formData,
+      [e.target.name]: e.target.value,
+    });
+  };
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        background: 'rgba(0,0,0,0.5)',
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        zIndex: 1000,
+      }}
+    >
+      <div
+        style={{
+          background: 'white',
+          padding: '30px',
+          borderRadius: '8px',
+          width: '90%',
+          maxWidth: '500px',
+          boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: '20px',
+          }}
+        >
+          <h2 style={{ margin: 0 }}>Record Missed Dose</h2>
+          <button
+            onClick={onClose}
+            style={{
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              padding: '5px',
+              borderRadius: '4px',
+            }}
+          >
+            <X size={24} color="#6c757d" />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit}>
+          <div style={{ marginBottom: '15px' }}>
+            <label
+              style={{
+                display: 'block',
+                marginBottom: '5px',
+                fontWeight: 'bold',
+              }}
+            >
+              Select Drug <span style={{ color: 'red' }}>*</span>
+            </label>
+            <select
+              name="regimen_drug_id"
+              value={formData.regimen_drug_id}
+              onChange={handleChange}
+              required
+              style={{
+                width: '100%',
+                padding: '8px',
+                border: '1px solid #ced4da',
+                borderRadius: '4px',
+              }}
+            >
+              <option value="">Select a drug</option>
+              {regimen.drugs && regimen.drugs.map((drug) => (
+                <option key={drug.regimen_drug_id} value={drug.regimen_drug_id}>
+                  {drug.drug_name} - {drug.dosage} (Missed: {drug.missed_doses || 0})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div style={{ marginBottom: '15px' }}>
+            <label
+              style={{
+                display: 'block',
+                marginBottom: '5px',
+                fontWeight: 'bold',
+              }}
+            >
+              Missed Date
+            </label>
+            <input
+              type="date"
+              name="missed_date"
+              value={formData.missed_date}
+              onChange={handleChange}
+              style={{
+                width: '100%',
+                padding: '8px',
+                border: '1px solid #ced4da',
+                borderRadius: '4px',
+              }}
+            />
+          </div>
+
+          <div style={{ marginBottom: '20px' }}>
+            <label
+              style={{
+                display: 'block',
+                marginBottom: '5px',
+                fontWeight: 'bold',
+              }}
+            >
+              Reason (Optional)
+            </label>
+            <textarea
+              name="reason"
+              value={formData.reason}
+              onChange={handleChange}
+              rows="3"
+              placeholder="Enter reason for missed dose..."
+              style={{
+                width: '100%',
+                padding: '8px',
+                border: '1px solid #ced4da',
+                borderRadius: '4px',
+              }}
+            />
+          </div>
+
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'flex-end',
+              gap: '10px',
+            }}
+          >
+            <button
+              type="button"
+              onClick={onClose}
+              style={{
+                padding: '8px 16px',
+                background: '#6c757d',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              style={{
+                padding: '8px 16px',
+                background: '#dc3545',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+              }}
+            >
+              Record Missed Dose
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+// History Modal Component
+const HistoryModal = ({ history, onClose }) => {
+  const getActionTypeLabel = (actionType) => {
+    const labels = {
+      started: 'Started Regimen',
+      stopped: 'Stopped Regimen',
+      changed: 'Changed Regimen',
+      drug_added: 'Drug Added',
+      drug_removed: 'Drug Removed',
+      pills_dispensed: 'Pills Dispensed',
+      dose_missed: 'Missed Dose',
+    };
+    return labels[actionType] || actionType;
+  };
+
+  const getActionColor = (actionType) => {
+    const colors = {
+      started: '#28a745',
+      stopped: '#dc3545',
+      changed: '#ffc107',
+      drug_added: '#17a2b8',
+      drug_removed: '#dc3545',
+      pills_dispensed: '#6f42c1',
+      dose_missed: '#dc3545',
+    };
+    return colors[actionType] || '#6c757d';
+  };
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        background: 'rgba(0,0,0,0.5)',
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        zIndex: 1000,
+      }}
+    >
+      <div
+        style={{
+          background: 'white',
+          padding: '30px',
+          borderRadius: '8px',
+          width: '90%',
+          maxWidth: '700px',
+          maxHeight: 'calc(100vh - 104px)',
+          overflow: 'auto',
+          boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: '20px',
+          }}
+        >
+          <h2 style={{ margin: 0 }}>Regimen History</h2>
+          <button
+            onClick={onClose}
+            style={{
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              padding: '5px',
+              borderRadius: '4px',
+            }}
+          >
+            <X size={24} color="#6c757d" />
+          </button>
+        </div>
+
+        {history.length === 0 ? (
+          <p style={{ textAlign: 'center', color: '#6c757d', padding: '20px' }}>
+            No history available
+          </p>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+            {history.map((entry) => (
+              <div
+                key={entry.history_id}
+                style={{
+                  background: '#f8f9fa',
+                  padding: '15px',
+                  borderRadius: '8px',
+                  borderLeft: `4px solid ${getActionColor(entry.action_type)}`,
+                }}
+              >
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'flex-start',
+                    marginBottom: '10px',
+                  }}
+                >
+                  <div>
+                    <span
+                      style={{
+                        background: getActionColor(entry.action_type),
+                        color: 'white',
+                        padding: '4px 8px',
+                        borderRadius: '4px',
+                        fontSize: '12px',
+                        fontWeight: 'bold',
+                        textTransform: 'capitalize',
+                      }}
+                    >
+                      {getActionTypeLabel(entry.action_type)}
+                    </span>
+                    <p style={{ margin: '5px 0 0 0', fontSize: '14px', color: '#6c757d' }}>
+                      {new Date(entry.action_date).toLocaleDateString()} at{' '}
+                      {new Date(entry.created_at).toLocaleTimeString()}
+                    </p>
+                  </div>
+                  {entry.performed_by_name && (
+                    <span style={{ fontSize: '12px', color: '#6c757d' }}>
+                      By: {entry.performed_by_name}
+                    </span>
+                  )}
+                </div>
+                {entry.previous_status && entry.new_status && (
+                  <p style={{ margin: '5px 0', fontSize: '14px' }}>
+                    Status: <strong>{entry.previous_status}</strong> → <strong>{entry.new_status}</strong>
+                  </p>
+                )}
+                {entry.details && (
+                  <div style={{ marginTop: '10px', fontSize: '14px' }}>
+                    <strong>Details:</strong>
+                    <pre
+                      style={{
+                        background: 'white',
+                        padding: '10px',
+                        borderRadius: '4px',
+                        marginTop: '5px',
+                        fontSize: '12px',
+                        overflow: 'auto',
+                        maxHeight: '150px',
+                      }}
+                    >
+                      {typeof entry.details === 'string'
+                        ? entry.details
+                        : JSON.stringify(entry.details, null, 2)}
+                    </pre>
+                  </div>
+                )}
+                {entry.notes && (
+                  <p style={{ margin: '10px 0 0 0', fontSize: '14px', fontStyle: 'italic' }}>
+                    <strong>Notes:</strong> {entry.notes}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'flex-end',
+            marginTop: '20px',
+          }}
+        >
+          <button
+            onClick={onClose}
+            style={{
+              padding: '8px 16px',
+              background: '#6c757d',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+            }}
+          >
+            Close
+          </button>
+        </div>
       </div>
     </div>
   );

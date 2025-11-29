@@ -13,8 +13,11 @@ const HTSSessions = () => {
   const [resultFilter, setResultFilter] = useState('all');
   const [showModal, setShowModal] = useState(false);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
   const [selectedSession, setSelectedSession] = useState(null);
+  const [editSession, setEditSession] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [editLoading, setEditLoading] = useState(false);
   const [newSession, setNewSession] = useState({
     patient_id: '',
     facility_id: '',
@@ -63,6 +66,7 @@ const HTSSessions = () => {
           setSessions(data.sessions || []);
         } else {
           console.error('API returned success=false:', data);
+          console.error('Full API response:', JSON.stringify(data, null, 2));
           setSessions([]);
         }
       } else {
@@ -74,9 +78,13 @@ const HTSSessions = () => {
           response.status,
           errorData
         );
-        alert(
-          `Failed to load HTS sessions: ${errorData.message || response.status}`
-        );
+        console.error('Full error response:', JSON.stringify(errorData, null, 2));
+        // Don't show alert for empty results, just log to console
+        if (response.status !== 200) {
+          alert(
+            `Failed to load HTS sessions: ${errorData.message || response.status}`
+          );
+        }
         setSessions([]);
       }
     } catch (error) {
@@ -253,6 +261,8 @@ const HTSSessions = () => {
         ...prev,
         [name]: value,
         linkage_referred: true,
+        // Set care_link_date to session_date (current date) when positive
+        care_link_date: prev.session_date || new Date().toISOString().split('T')[0],
       }));
     } else {
       setNewSession((prev) => ({
@@ -308,9 +318,17 @@ const HTSSessions = () => {
           pre_test_counseling: newSession.pre_test_counseling || false,
           post_test_counseling: newSession.post_test_counseling || false,
           linked_to_care: newSession.linkage_referred || false,
-          care_link_date: newSession.linkage_referred
-            ? new Date().toISOString().split('T')[0]
-            : null,
+          care_link_date: (() => {
+            // If positive/reactive, automatically set care_link_date to session_date
+            const isPositive = newSession.test_result === 'Positive' || 
+                              newSession.test_result === 'Reactive' || 
+                              newSession.test_result === 'positive' || 
+                              newSession.test_result === 'reactive';
+            if (isPositive || newSession.linkage_referred) {
+              return newSession.session_date || new Date().toISOString().split('T')[0];
+            }
+            return null;
+          })(),
           notes: JSON.stringify(notesData),
         }),
       });
@@ -377,6 +395,107 @@ const HTSSessions = () => {
     if (session) {
       setSelectedSession(session);
       setShowDetailsModal(true);
+    }
+  };
+
+  const handleEditSession = (sessionId) => {
+    const session = sessions.find((s) => {
+      const sId = s.hts_id || s.id;
+      return sId === sessionId;
+    });
+    if (session) {
+      // Parse notes if available
+      let notesData = {};
+      try {
+        if (session.notes) {
+          notesData = JSON.parse(session.notes);
+        }
+      } catch (e) {
+        console.error('Error parsing notes:', e);
+      }
+
+      setEditSession({
+        hts_id: session.hts_id || session.id,
+        patient_id: session.patient_id,
+        facility_id: session.facility_id,
+        tester_id: session.tester_id,
+        test_date: session.test_date || new Date().toISOString().split('T')[0],
+        test_result: session.test_result,
+        test_type: session.test_type || notesData.session_type || 'Facility-based',
+        pre_test_counseling: session.pre_test_counseling || false,
+        post_test_counseling: session.post_test_counseling || false,
+        linked_to_care: session.linked_to_care || false,
+        care_link_date: session.care_link_date || null,
+        notes: notesData.remarks || session.notes || '',
+        client_type: notesData.client_type || '',
+        consent_given: notesData.consent_given || false,
+        referral_destination: notesData.referral_destination || '',
+      });
+      setShowEditModal(true);
+    }
+  };
+
+  const handleUpdateSession = async (e) => {
+    e.preventDefault();
+    if (!editSession) return;
+
+    setEditLoading(true);
+
+    try {
+      const token = getAuthToken();
+      if (!token) {
+        alert('Please log in to update HTS sessions');
+        setEditLoading(false);
+        return;
+      }
+
+      // Prepare notes with additional fields
+      const notesData = {
+        session_type: editSession.test_type,
+        client_type: editSession.client_type || null,
+        consent_given: editSession.consent_given,
+        referral_destination: editSession.referral_destination || null,
+        remarks: editSession.notes || null,
+      };
+
+      const response = await fetch(`${API_URL}/hts-sessions/${editSession.hts_id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          test_date: editSession.test_date,
+          test_result: editSession.test_result,
+          test_type: editSession.test_type,
+          pre_test_counseling: editSession.pre_test_counseling,
+          post_test_counseling: editSession.post_test_counseling,
+          linked_to_care: editSession.linked_to_care,
+          care_link_date: editSession.linked_to_care && !editSession.care_link_date 
+            ? editSession.test_date 
+            : editSession.care_link_date,
+          notes: JSON.stringify(notesData),
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success) {
+          await loadSessions();
+          setShowEditModal(false);
+          setEditSession(null);
+        } else {
+          alert(data.message || 'Failed to update HTS session');
+        }
+      } else {
+        const error = await response.json();
+        alert(error.message || 'Failed to update HTS session');
+      }
+    } catch (error) {
+      console.error('Error updating HTS session:', error);
+      alert('Error updating HTS session');
+    } finally {
+      setEditLoading(false);
     }
   };
 
@@ -806,7 +925,17 @@ const HTSSessions = () => {
                       style={styles.viewButton}
                       onClick={() => viewSessionDetails(sessionId)}
                     >
-                      View Details
+                      View
+                    </button>
+                    <button
+                      style={{
+                        ...styles.viewButton,
+                        backgroundColor: '#ffc107',
+                        marginLeft: '8px',
+                      }}
+                      onClick={() => handleEditSession(sessionId)}
+                    >
+                      Edit
                     </button>
                   </div>
                 </div>
@@ -817,7 +946,7 @@ const HTSSessions = () => {
               style={{ padding: '20px', textAlign: 'center', color: '#666' }}
             >
               {sessions.length === 0
-                ? 'No HTS sessions found. Check console for API response details.'
+                ? 'No HTS sessions found. If you just created a session, try refreshing the page. Check browser console (F12) for API response details.'
                 : `No sessions match your filters. Showing ${sessions.length} total session(s).`}
             </div>
           )}
@@ -1292,12 +1421,196 @@ const HTSSessions = () => {
             <div style={styles.modalFooter}>
               <button
                 type="button"
+                style={{
+                  ...styles.viewButton,
+                  backgroundColor: '#ffc107',
+                }}
+                onClick={() => {
+                  setShowDetailsModal(false);
+                  if (selectedSession) {
+                    handleEditSession(selectedSession.hts_id || selectedSession.id);
+                  }
+                }}
+              >
+                Edit
+              </button>
+              <button
+                type="button"
                 style={styles.cancelButton}
                 onClick={() => setShowDetailsModal(false)}
               >
                 Close
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Session Modal */}
+      {showEditModal && editSession && (
+        <div style={styles.modalOverlay}>
+          <div style={styles.modalContent}>
+            <div style={styles.modalHeader}>
+              <h2 style={styles.modalTitle}>Edit HTS Session</h2>
+              <button
+                style={styles.modalClose}
+                onClick={() => {
+                  setShowEditModal(false);
+                  setEditSession(null);
+                }}
+                onMouseEnter={(e) => {
+                  e.target.style.backgroundColor = '#f0f0f0';
+                }}
+                onMouseLeave={(e) => {
+                  e.target.style.backgroundColor = 'transparent';
+                }}
+                title="Close"
+              >
+                &times;
+              </button>
+            </div>
+            <form onSubmit={handleUpdateSession}>
+              <div style={styles.modalBody}>
+                <div style={styles.formGroup}>
+                  <label style={styles.label} htmlFor="edit_test_date">
+                    Test Date <span style={{ color: 'red' }}>*</span>
+                  </label>
+                  <input
+                    type="date"
+                    id="edit_test_date"
+                    value={editSession.test_date}
+                    onChange={(e) => setEditSession({ ...editSession, test_date: e.target.value })}
+                    style={styles.input}
+                    required
+                  />
+                </div>
+                <div style={styles.formGroup}>
+                  <label style={styles.label} htmlFor="edit_test_result">
+                    Test Result <span style={{ color: 'red' }}>*</span>
+                  </label>
+                  <select
+                    id="edit_test_result"
+                    value={editSession.test_result}
+                    onChange={(e) => {
+                      const newResult = e.target.value;
+                      const isPositive = newResult === 'positive' || newResult === 'Positive' || newResult === 'Reactive';
+                      setEditSession({ 
+                        ...editSession, 
+                        test_result: newResult,
+                        linked_to_care: isPositive ? true : editSession.linked_to_care,
+                        care_link_date: isPositive && !editSession.care_link_date 
+                          ? (editSession.test_date || new Date().toISOString().split('T')[0])
+                          : editSession.care_link_date
+                      });
+                    }}
+                    style={styles.select}
+                    required
+                  >
+                    <option value="">Select Result</option>
+                    <option value="Non-reactive">Non-reactive</option>
+                    <option value="Reactive">Reactive</option>
+                    <option value="Positive">Positive</option>
+                    <option value="Indeterminate">Indeterminate</option>
+                  </select>
+                </div>
+                <div style={styles.formGroup}>
+                  <label style={styles.label} htmlFor="edit_test_type">
+                    Test Type
+                  </label>
+                  <input
+                    type="text"
+                    id="edit_test_type"
+                    value={editSession.test_type}
+                    onChange={(e) => setEditSession({ ...editSession, test_type: e.target.value })}
+                    style={styles.input}
+                    placeholder="e.g., Facility-based, Community-based"
+                  />
+                </div>
+                <h4>Pre-Test Counseling</h4>
+                <div style={styles.checkboxGroup}>
+                  <input
+                    type="checkbox"
+                    id="edit_pre_test_counseling"
+                    checked={editSession.pre_test_counseling}
+                    onChange={(e) => setEditSession({ ...editSession, pre_test_counseling: e.target.checked })}
+                    style={styles.checkbox}
+                  />
+                  <label htmlFor="edit_pre_test_counseling">
+                    Pre-test counseling provided
+                  </label>
+                </div>
+                <h4>Post-Test</h4>
+                <div style={styles.checkboxGroup}>
+                  <input
+                    type="checkbox"
+                    id="edit_post_test_counseling"
+                    checked={editSession.post_test_counseling}
+                    onChange={(e) => setEditSession({ ...editSession, post_test_counseling: e.target.checked })}
+                    style={styles.checkbox}
+                  />
+                  <label htmlFor="edit_post_test_counseling">
+                    Post-test counseling provided
+                  </label>
+                </div>
+                <div style={styles.checkboxGroup}>
+                  <input
+                    type="checkbox"
+                    id="edit_linked_to_care"
+                    checked={editSession.linked_to_care}
+                    onChange={(e) => setEditSession({ ...editSession, linked_to_care: e.target.checked })}
+                    style={styles.checkbox}
+                  />
+                  <label htmlFor="edit_linked_to_care">
+                    Linked to care
+                  </label>
+                </div>
+                {editSession.linked_to_care && (
+                  <div style={styles.formGroup}>
+                    <label style={styles.label} htmlFor="edit_care_link_date">
+                      Care Link Date
+                    </label>
+                    <input
+                      type="date"
+                      id="edit_care_link_date"
+                      value={editSession.care_link_date || editSession.test_date}
+                      onChange={(e) => setEditSession({ ...editSession, care_link_date: e.target.value })}
+                      style={styles.input}
+                    />
+                  </div>
+                )}
+                <div style={styles.formGroup}>
+                  <label style={styles.label} htmlFor="edit_notes">
+                    Notes/Remarks
+                  </label>
+                  <textarea
+                    id="edit_notes"
+                    value={editSession.notes}
+                    onChange={(e) => setEditSession({ ...editSession, notes: e.target.value })}
+                    style={styles.textarea}
+                    rows="3"
+                  />
+                </div>
+              </div>
+              <div style={styles.modalFooter}>
+                <button
+                  type="button"
+                  style={styles.cancelButton}
+                  onClick={() => {
+                    setShowEditModal(false);
+                    setEditSession(null);
+                  }}
+                >
+                  Cancel
+                </button>
+                <button 
+                  type="submit" 
+                  style={styles.saveButton}
+                  disabled={editLoading}
+                >
+                  {editLoading ? 'Updating...' : 'Update Session'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

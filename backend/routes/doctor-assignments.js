@@ -55,7 +55,7 @@ async function generateSlotsFromAssignment(assignment) {
     const batchSize = 100;
     for (let i = 0; i < slots.length; i += batchSize) {
       const batch = slots.slice(i, i + batchSize);
-      const placeholders = batch.map(() => '(?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)').join(',');
+      const placeholders = batch.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').join(',');
       const values = batch.flatMap(slot => [
         slot.slot_id,
         slot.provider_id,
@@ -65,6 +65,7 @@ async function generateSlotsFromAssignment(assignment) {
         slot.start_time,
         slot.end_time,
         slot.slot_status,
+        null, // appointment_id - explicitly set to NULL
         slot.assignment_id,
         slot.lock_status ? 1 : 0
       ]);

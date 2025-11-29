@@ -9,7 +9,7 @@ const router = express.Router();
 // GET /api/hts-sessions - Get all HTS sessions with filters
 router.get('/', authenticateToken, async (req, res) => {
   try {
-    if (!['admin', 'physician', 'nurse', 'case_manager'].includes(req.user.role)) {
+    if (!['admin', 'physician', 'nurse', 'case_manager', 'lab_personnel'].includes(req.user.role)) {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
@@ -60,11 +60,9 @@ router.get('/', authenticateToken, async (req, res) => {
       params.push(test_date_to);
     }
 
-    // Filter by role - non-admin users see only their sessions
-    if (req.user.role !== 'admin') {
-      query += ' AND hts.tester_id = ?';
-      params.push(req.user.user_id);
-    }
+    // Filter by role - only patients see limited data, staff roles see all sessions
+    // Admin, physician, nurse, case_manager, and lab_personnel can see all sessions
+    // No filtering needed for these roles
 
     query += ' ORDER BY hts.test_date DESC, hts.created_at DESC';
 
@@ -100,8 +98,10 @@ router.get('/:id', authenticateToken, async (req, res) => {
       return res.status(404).json({ success: false, message: 'HTS session not found' });
     }
 
-    // Check access - non-admin users can only see their own sessions
-    if (req.user.role !== 'admin' && sessions[0].tester_id !== req.user.user_id) {
+    // Check access - staff roles (admin, physician, nurse, case_manager, lab_personnel) can see all sessions
+    // Only patients would be restricted, but they don't have access to this endpoint
+    const allowedRoles = ['admin', 'physician', 'nurse', 'case_manager', 'lab_personnel'];
+    if (!allowedRoles.includes(req.user.role)) {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
@@ -119,7 +119,7 @@ router.post('/', authenticateToken, async (req, res) => {
   try {
     await connection.beginTransaction();
 
-    if (!['admin', 'physician', 'nurse'].includes(req.user.role)) {
+    if (!['admin', 'physician', 'nurse', 'lab_personnel'].includes(req.user.role)) {
       await connection.rollback();
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
@@ -150,6 +150,16 @@ router.post('/', authenticateToken, async (req, res) => {
     // Use provided tester_id or default to current user
     const finalTesterId = tester_id || req.user.user_id;
 
+    // Check if test result is positive/reactive (case-insensitive)
+    const testResultLower = (test_result || '').toLowerCase();
+    const isPositive = testResultLower === 'positive' || testResultLower === 'reactive';
+    
+    // If positive, automatically link to care
+    const finalLinkedToCare = linked_to_care || isPositive;
+    const finalCareLinkDate = finalLinkedToCare 
+      ? (care_link_date || test_date) 
+      : null;
+
     // Generate UUID
     const hts_id = uuidv4();
 
@@ -170,25 +180,68 @@ router.post('/', authenticateToken, async (req, res) => {
         test_type || null,
         pre_test_counseling ? 1 : 0,
         post_test_counseling ? 1 : 0,
-        linked_to_care ? 1 : 0,
-        linked_to_care && care_link_date ? care_link_date : (linked_to_care ? test_date : null),
+        finalLinkedToCare ? 1 : 0,
+        finalCareLinkDate,
         notes || null,
       ]
     );
 
-    // If positive, automatically link to care if not already done
-    if (test_result === 'positive' && !linked_to_care) {
-      await connection.query(
-        `UPDATE hts_sessions 
-         SET linked_to_care = 1, care_link_date = ?
-         WHERE hts_id = ?`,
-        [test_date, hts_id]
-      );
+    // Record Counseling (P7.4): Create counseling_sessions records
+    const counselingSessionsCreated = [];
+    
+    // Create pre-test counseling session if provided
+    if (pre_test_counseling) {
+      const preCounselingId = uuidv4();
+      try {
+        await connection.query(
+          `INSERT INTO counseling_sessions (
+            session_id, patient_id, counselor_id, facility_id, session_date,
+            session_type, session_notes, follow_up_required, follow_up_date
+          ) VALUES (?, ?, ?, ?, ?, 'pre_test', ?, 0, NULL)`,
+          [
+            preCounselingId,
+            patient_id,
+            finalTesterId,
+            facility_id,
+            test_date,
+            `Pre-test counseling for HTS session ${hts_id}. ${notes || ''}`.trim(),
+          ]
+        );
+        counselingSessionsCreated.push({ id: preCounselingId, type: 'pre_test' });
+      } catch (counselingErr) {
+        // Log but don't fail the transaction if counseling session creation fails
+        console.error('Failed to create pre-test counseling session:', counselingErr);
+      }
+    }
+
+    // Create post-test counseling session if provided
+    if (post_test_counseling) {
+      const postCounselingId = uuidv4();
+      try {
+        await connection.query(
+          `INSERT INTO counseling_sessions (
+            session_id, patient_id, counselor_id, facility_id, session_date,
+            session_type, session_notes, follow_up_required, follow_up_date
+          ) VALUES (?, ?, ?, ?, ?, 'post_test', ?, 0, NULL)`,
+          [
+            postCounselingId,
+            patient_id,
+            finalTesterId,
+            facility_id,
+            test_date,
+            `Post-test counseling for HTS session ${hts_id}. Test result: ${test_result}. ${notes || ''}`.trim(),
+          ]
+        );
+        counselingSessionsCreated.push({ id: postCounselingId, type: 'post_test' });
+      } catch (counselingErr) {
+        // Log but don't fail the transaction if counseling session creation fails
+        console.error('Failed to create post-test counseling session:', counselingErr);
+      }
     }
 
     await connection.commit();
 
-    // Log audit
+    // Log audit for HTS session creation
     const auditInfo = await getUserInfoForAudit(req.user.user_id);
     await logAudit({
       ...auditInfo,
@@ -197,11 +250,40 @@ router.post('/', authenticateToken, async (req, res) => {
       entity_type: 'hts_session',
       entity_id: hts_id,
       record_id: hts_id,
-      new_value: { hts_id, patient_id, test_result, linked_to_care },
-      change_summary: `Conducted HTS session for patient ${patient_id}, result: ${test_result}`,
+      new_value: { 
+        hts_id, 
+        patient_id, 
+        test_result, 
+        linked_to_care: finalLinkedToCare,
+        care_link_date: finalCareLinkDate,
+        pre_test_counseling,
+        post_test_counseling 
+      },
+      change_summary: `Conducted HTS session for patient ${patient_id}, result: ${test_result}${isPositive ? ', automatically linked to care' : ''}`,
       ip_address: getClientIp(req),
       user_agent: req.get('user-agent'),
     });
+
+    // Log audit for counseling sessions created (P7.4)
+    for (const counselingSession of counselingSessionsCreated) {
+      await logAudit({
+        ...auditInfo,
+        action: 'CREATE',
+        module: 'Counseling Sessions',
+        entity_type: 'counseling_session',
+        entity_id: counselingSession.id,
+        record_id: counselingSession.id,
+        new_value: { 
+          session_id: counselingSession.id, 
+          patient_id, 
+          session_type: counselingSession.type,
+          related_hts_session: hts_id 
+        },
+        change_summary: `Recorded ${counselingSession.type} counseling session for HTS session ${hts_id}`,
+        ip_address: getClientIp(req),
+        user_agent: req.get('user-agent'),
+      });
+    }
 
     res.json({
       success: true,
@@ -229,8 +311,9 @@ router.put('/:id', authenticateToken, async (req, res) => {
       return res.status(404).json({ success: false, message: 'HTS session not found' });
     }
 
-    // Check access - non-admin users can only update their own sessions
-    if (req.user.role !== 'admin' && sessions[0].tester_id !== req.user.user_id) {
+    // Check access - staff roles (admin, physician, nurse, case_manager, lab_personnel) can update any session
+    const allowedRoles = ['admin', 'physician', 'nurse', 'case_manager', 'lab_personnel'];
+    if (!allowedRoles.includes(req.user.role)) {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
@@ -245,6 +328,25 @@ router.put('/:id', authenticateToken, async (req, res) => {
       notes,
     } = req.body;
 
+    // Determine final values
+    const finalTestDate = test_date || sessions[0].test_date;
+    const finalTestResult = test_result || sessions[0].test_result;
+    
+    // Check if test result is positive/reactive (case-insensitive)
+    const testResultLower = (finalTestResult || '').toLowerCase();
+    const isPositive = testResultLower === 'positive' || testResultLower === 'reactive';
+    
+    // If positive, automatically link to care if not already linked
+    const currentLinkedToCare = linked_to_care !== undefined 
+      ? linked_to_care 
+      : (sessions[0].linked_to_care === 1);
+    const finalLinkedToCare = currentLinkedToCare || isPositive;
+    
+    // Set care_link_date if linking to care
+    const finalCareLinkDate = finalLinkedToCare 
+      ? (care_link_date || finalTestDate)
+      : (care_link_date !== undefined ? care_link_date : sessions[0].care_link_date);
+
     await db.query(
       `UPDATE hts_sessions 
        SET test_date = COALESCE(?, test_date),
@@ -252,8 +354,8 @@ router.put('/:id', authenticateToken, async (req, res) => {
            test_type = COALESCE(?, test_type),
            pre_test_counseling = COALESCE(?, pre_test_counseling),
            post_test_counseling = COALESCE(?, post_test_counseling),
-           linked_to_care = COALESCE(?, linked_to_care),
-           care_link_date = COALESCE(?, care_link_date),
+           linked_to_care = ?,
+           care_link_date = ?,
            notes = COALESCE(?, notes)
        WHERE hts_id = ?`,
       [
@@ -262,8 +364,8 @@ router.put('/:id', authenticateToken, async (req, res) => {
         test_type !== undefined ? test_type : sessions[0].test_type,
         pre_test_counseling !== undefined ? (pre_test_counseling ? 1 : 0) : sessions[0].pre_test_counseling,
         post_test_counseling !== undefined ? (post_test_counseling ? 1 : 0) : sessions[0].post_test_counseling,
-        linked_to_care !== undefined ? (linked_to_care ? 1 : 0) : sessions[0].linked_to_care,
-        care_link_date !== undefined ? care_link_date : sessions[0].care_link_date,
+        finalLinkedToCare ? 1 : 0,
+        finalCareLinkDate,
         notes !== undefined ? notes : sessions[0].notes,
         req.params.id,
       ]

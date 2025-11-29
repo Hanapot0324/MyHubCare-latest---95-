@@ -31,6 +31,10 @@ const LabTests = () => {
   // State to track deleting files (to disable delete buttons)
   const [deletingFiles, setDeletingFiles] = useState(new Set());
 
+  // Current user and role
+  const [currentUser, setCurrentUser] = useState(null);
+  const [userRole, setUserRole] = useState(null);
+
   // Users with their names and roles
   const [users] = useState([
     { name: 'Admin User', role: 'ADMIN' },
@@ -44,12 +48,24 @@ const LabTests = () => {
   // Extract unique roles for the role dropdown
   const uniqueRoles = [...new Set(users.map((user) => user.role))];
 
-  // Fetch data on component mount
+  // Fetch current user on component mount
   useEffect(() => {
-    fetchPatients();
-    fetchFacilities();
-    fetchLabOrders(); // Fetch orders for the form dropdown
+    getCurrentUser();
   }, []);
+
+  // Fetch data after user is loaded
+  useEffect(() => {
+    if (userRole !== null && userRole !== undefined) {
+      fetchFacilities();
+      fetchLabOrders(); // Fetch orders for the form dropdown
+      
+      if (userRole !== 'patient') {
+        fetchPatients();
+      } else {
+        setPatients([]);
+      }
+    }
+  }, [userRole, currentUser]);
 
   // Fetch lab results when results tab is active or filters change
   useEffect(() => {
@@ -79,6 +95,43 @@ const LabTests = () => {
   // Get auth token helper
   const getAuthToken = () => {
     return localStorage.getItem('token');
+  };
+
+  // Get current user
+  const getCurrentUser = async () => {
+    try {
+      const token = getAuthToken();
+      if (!token) return;
+
+      // Try to get from localStorage first
+      const userStr = localStorage.getItem('user');
+      if (userStr) {
+        try {
+          const user = JSON.parse(userStr);
+          setCurrentUser(user);
+          setUserRole(user.role?.toLowerCase());
+          return;
+        } catch (e) {
+          console.error('Error parsing user from localStorage:', e);
+        }
+      }
+
+      // If not in localStorage, fetch from API
+      const response = await fetch(`${API_BASE_URL}/auth/me`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.user) {
+          setCurrentUser(data.user);
+          setUserRole(data.user.role?.toLowerCase());
+          localStorage.setItem('user', JSON.stringify(data.user));
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching current user:', error);
+    }
   };
 
   // Fetch patients from API
@@ -162,6 +215,27 @@ const LabTests = () => {
       if (testFilter && testFilter !== 'all')
         params.append('test_name', testFilter);
 
+      // If user is a patient, filter by their patient_id
+      if (userRole === 'patient' && currentUser) {
+        const patientId = 
+          currentUser.patient?.patient_id ||
+          currentUser.patient_id ||
+          null;
+        
+        if (patientId) {
+          params.append('patient_id', patientId);
+        } else {
+          // Patient user without patient_id should not see any records
+          setToast({
+            message: 'Unable to load lab results: Patient ID not found',
+            type: 'error',
+          });
+          setTestResults([]);
+          setLoading(false);
+          return;
+        }
+      }
+
       const queryString = params.toString();
       const url = `${API_BASE_URL}/lab-results${
         queryString ? `?${queryString}` : ''
@@ -216,7 +290,35 @@ const LabTests = () => {
         return;
       }
 
-      const response = await fetch(`${API_BASE_URL}/lab-files`, {
+      const params = new URLSearchParams();
+      
+      // If user is a patient, filter by their patient_id
+      if (userRole === 'patient' && currentUser) {
+        const patientId = 
+          currentUser.patient?.patient_id ||
+          currentUser.patient_id ||
+          null;
+        
+        if (patientId) {
+          params.append('patient_id', patientId);
+        } else {
+          // Patient user without patient_id should not see any records
+          setToast({
+            message: 'Unable to load lab files: Patient ID not found',
+            type: 'error',
+          });
+          setLabFiles([]);
+          setLoading(false);
+          return;
+        }
+      }
+
+      const queryString = params.toString();
+      const url = `${API_BASE_URL}/lab-files${
+        queryString ? `?${queryString}` : ''
+      }`;
+
+      const response = await fetch(url, {
         headers: { Authorization: `Bearer ${token}` },
       });
 
@@ -267,6 +369,27 @@ const LabTests = () => {
       if (searchTerm) params.append('search', searchTerm);
       if (statusFilter && statusFilter !== 'all')
         params.append('status', statusFilter);
+
+      // If user is a patient, filter by their patient_id
+      if (userRole === 'patient' && currentUser) {
+        const patientId = 
+          currentUser.patient?.patient_id ||
+          currentUser.patient_id ||
+          null;
+        
+        if (patientId) {
+          params.append('patient_id', patientId);
+        } else {
+          // Patient user without patient_id should not see any records
+          setToast({
+            message: 'Unable to load lab orders: Patient ID not found',
+            type: 'error',
+          });
+          setLabOrders([]);
+          setLoading(false);
+          return;
+        }
+      }
 
       const queryString = params.toString();
       const url = `${API_BASE_URL}/lab-orders${
@@ -959,18 +1082,57 @@ const LabTests = () => {
     }
   };
 
-  // Filter functions
-  const filteredResults = testResults.filter((result) => {
-    const matchesSearch =
-      searchTerm === '' ||
-      result.patient.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      result.testName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      result.result.toLowerCase().includes(searchTerm.toLowerCase());
+  // Filter functions with patient filtering as safety measure
+  const getFilteredResults = () => {
+    let filtered = testResults;
 
-    const matchesTest = testFilter === 'all' || result.testName === testFilter;
+    // Additional client-side filtering for patients (backend should already filter, but this is a safety measure)
+    if (userRole === 'patient' && currentUser) {
+      const patientId =
+        currentUser.patient?.patient_id ||
+        currentUser.patient_id ||
+        currentUser.patientId ||
+        null;
 
-    return matchesSearch && matchesTest;
-  });
+      if (patientId) {
+        filtered = filtered.filter((result) => {
+          // Check multiple possible fields for patient_id
+          const resultPatientId = 
+            result.patient_id || 
+            result.patient?.patient_id ||
+            result.patientId ||
+            null;
+          
+          // If we can't find patient_id in result, filter it out for safety
+          if (!resultPatientId) {
+            return false;
+          }
+          
+          return String(resultPatientId) === String(patientId);
+        });
+      } else {
+        // If patient_id is not found, show empty list
+        filtered = [];
+      }
+    }
+
+    // Apply search and test filters
+    filtered = filtered.filter((result) => {
+      const matchesSearch =
+        searchTerm === '' ||
+        (result.patient && result.patient.toLowerCase().includes(searchTerm.toLowerCase())) ||
+        (result.testName && result.testName.toLowerCase().includes(searchTerm.toLowerCase())) ||
+        (result.result && result.result.toLowerCase().includes(searchTerm.toLowerCase()));
+
+      const matchesTest = testFilter === 'all' || result.testName === testFilter;
+
+      return matchesSearch && matchesTest;
+    });
+
+    return filtered;
+  };
+
+  const filteredResults = getFilteredResults();
 
   // Fetch lab orders when orders tab is active or filters change
   useEffect(() => {
@@ -997,8 +1159,74 @@ const LabTests = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
 
-  // Filter orders (client-side filtering as backup, but API handles most filtering)
-  const filteredOrders = labOrders;
+  // Filter orders with patient filtering as safety measure
+  const getFilteredOrders = () => {
+    let filtered = labOrders;
+
+    // Additional client-side filtering for patients (backend should already filter, but this is a safety measure)
+    if (userRole === 'patient' && currentUser) {
+      const patientId =
+        currentUser.patient?.patient_id ||
+        currentUser.patient_id ||
+        currentUser.patientId ||
+        null;
+
+      if (patientId) {
+        filtered = filtered.filter((order) => {
+          // Check multiple possible fields for patient_id
+          const orderPatientId = 
+            order.patient_id || 
+            order.patient?.patient_id ||
+            order.patientId ||
+            null;
+          
+          // If we can't find patient_id in order, filter it out for safety
+          if (!orderPatientId) {
+            return false;
+          }
+          
+          return String(orderPatientId) === String(patientId);
+        });
+      } else {
+        // If patient_id is not found, show empty list
+        filtered = [];
+      }
+    }
+
+    return filtered;
+  };
+
+  const filteredOrders = getFilteredOrders();
+
+  // Filter lab files with patient filtering as safety measure
+  const getFilteredLabFiles = () => {
+    let filtered = labFiles;
+
+    // Additional client-side filtering for patients (backend should already filter, but this is a safety measure)
+    if (userRole === 'patient' && currentUser) {
+      const patientId =
+        currentUser.patient?.patient_id ||
+        currentUser.patient_id ||
+        currentUser.patientId ||
+        null;
+
+      if (patientId) {
+        // Filter files by patient_id from the associated result
+        filtered = filtered.filter((file) => {
+          // Check if file has patient_id directly or through result
+          const filePatientId = file.patient_id || file.result?.patient_id || null;
+          return filePatientId ? String(filePatientId) === String(patientId) : false;
+        });
+      } else {
+        // If patient_id is not found, show empty list
+        filtered = [];
+      }
+    }
+
+    return filtered;
+  };
+
+  const filteredLabFiles = getFilteredLabFiles();
 
   // Get unique test names for filter
   const uniqueTestNames = [
@@ -1435,14 +1663,16 @@ const LabTests = () => {
           <>
             <div style={styles.cardHeader}>
               <h1 style={styles.cardTitle}>Laboratory Test Results</h1>
-              <button
-                style={styles.addButton}
-                onClick={() => openModal('addResult')}
-                onMouseEnter={(e) => (e.target.style.background = '#F8F2DE')}
-                onMouseLeave={(e) => (e.target.style.background = '#ECDCBF')}
-              >
-                Add Test Result
-              </button>
+              {userRole !== 'patient' && (
+                <button
+                  style={styles.addButton}
+                  onClick={() => openModal('addResult')}
+                  onMouseEnter={(e) => (e.target.style.background = '#F8F2DE')}
+                  onMouseLeave={(e) => (e.target.style.background = '#ECDCBF')}
+                >
+                  Add Test Result
+                </button>
+              )}
             </div>
 
             <div style={styles.filterContainer}>
@@ -1470,19 +1700,23 @@ const LabTests = () => {
             <table style={styles.table}>
               <thead>
                 <tr>
-                  <th style={styles.tableHeaderCell}>PATIENT</th>
+                  {userRole !== 'patient' && (
+                    <th style={styles.tableHeaderCell}>PATIENT</th>
+                  )}
                   <th style={styles.tableHeaderCell}>TEST NAME</th>
                   <th style={styles.tableHeaderCell}>RESULT</th>
                   <th style={styles.tableHeaderCell}>DATE</th>
                   <th style={styles.tableHeaderCell}>STATUS</th>
                   <th style={styles.tableHeaderCell}>PRIORITY</th>
-                  <th style={styles.tableHeaderCell}>ACTIONS</th>
+                  {userRole !== 'patient' && (
+                    <th style={styles.tableHeaderCell}>ACTIONS</th>
+                  )}
                 </tr>
               </thead>
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan="7" style={styles.tableCell}>
+                    <td colSpan={userRole === 'patient' ? 6 : 7} style={styles.tableCell}>
                       <div style={styles.emptyState}>
                         <div style={styles.emptyStateText}>
                           Loading lab results...
@@ -1492,7 +1726,7 @@ const LabTests = () => {
                   </tr>
                 ) : filteredResults.length === 0 ? (
                   <tr>
-                    <td colSpan="7" style={styles.tableCell}>
+                    <td colSpan={userRole === 'patient' ? 6 : 7} style={styles.tableCell}>
                       <div style={styles.emptyState}>
                         <div style={styles.emptyStateIcon}>📋</div>
                         <div style={styles.emptyStateText}>
@@ -1560,72 +1794,76 @@ const LabTests = () => {
                           >
                             View
                           </button>
-                          <button
-                            style={{
-                              ...styles.actionButton,
-                              ...styles.editButton,
-                            }}
-                            onClick={() => openModal('editResult', result)}
-                            onMouseEnter={(e) =>
-                              (e.target.style.background = '#F8F2DE')
-                            }
-                            onMouseLeave={(e) =>
-                              (e.target.style.background = '#ECDCBF')
-                            }
-                          >
-                            Edit
-                          </button>
-                          <button
-                            style={{
-                              ...styles.actionButton,
-                              ...styles.deleteButton,
-                              opacity: deletingFiles.has(
-                                result.result_id || result.id
-                              )
-                                ? 0.5
-                                : 1,
-                              cursor: deletingFiles.has(
-                                result.result_id || result.id
-                              )
-                                ? 'not-allowed'
-                                : 'pointer',
-                            }}
-                            onClick={() =>
-                              deleteResult(result.result_id || result.id)
-                            }
-                            disabled={deletingFiles.has(
-                              result.result_id || result.id
-                            )}
-                            onMouseEnter={(e) =>
-                              !deletingFiles.has(
-                                result.result_id || result.id
-                              ) && (e.target.style.background = '#D84040')
-                            }
-                            onMouseLeave={(e) =>
-                              !deletingFiles.has(
-                                result.result_id || result.id
-                              ) && (e.target.style.background = '#A31D1D')
-                            }
-                          >
-                            {deletingFiles.has(result.result_id || result.id)
-                              ? 'Deleting...'
-                              : 'Delete'}
-                          </button>
-                          <button
-                            style={{
-                              ...styles.actionButton,
-                              ...styles.uploadButton,
-                            }}
-                            onClick={() => openModal('uploadFile', result)}
-                            onMouseEnter={(e) =>
-                              (e.target.style.background = '#F8F2DE')
-                            }
-                            onMouseLeave={(e) =>
-                              (e.target.style.background = '#ECDCBF')
-                            }
-                          >
-                            Upload
-                          </button>
+                          {userRole !== 'patient' && (
+                            <>
+                              <button
+                                style={{
+                                  ...styles.actionButton,
+                                  ...styles.editButton,
+                                }}
+                                onClick={() => openModal('editResult', result)}
+                                onMouseEnter={(e) =>
+                                  (e.target.style.background = '#F8F2DE')
+                                }
+                                onMouseLeave={(e) =>
+                                  (e.target.style.background = '#ECDCBF')
+                                }
+                              >
+                                Edit
+                              </button>
+                              <button
+                                style={{
+                                  ...styles.actionButton,
+                                  ...styles.deleteButton,
+                                  opacity: deletingFiles.has(
+                                    result.result_id || result.id
+                                  )
+                                    ? 0.5
+                                    : 1,
+                                  cursor: deletingFiles.has(
+                                    result.result_id || result.id
+                                  )
+                                    ? 'not-allowed'
+                                    : 'pointer',
+                                }}
+                                onClick={() =>
+                                  deleteResult(result.result_id || result.id)
+                                }
+                                disabled={deletingFiles.has(
+                                  result.result_id || result.id
+                                )}
+                                onMouseEnter={(e) =>
+                                  !deletingFiles.has(
+                                    result.result_id || result.id
+                                  ) && (e.target.style.background = '#D84040')
+                                }
+                                onMouseLeave={(e) =>
+                                  !deletingFiles.has(
+                                    result.result_id || result.id
+                                  ) && (e.target.style.background = '#A31D1D')
+                                }
+                              >
+                                {deletingFiles.has(result.result_id || result.id)
+                                  ? 'Deleting...'
+                                  : 'Delete'}
+                              </button>
+                              <button
+                                style={{
+                                  ...styles.actionButton,
+                                  ...styles.uploadButton,
+                                }}
+                                onClick={() => openModal('uploadFile', result)}
+                                onMouseEnter={(e) =>
+                                  (e.target.style.background = '#F8F2DE')
+                                }
+                                onMouseLeave={(e) =>
+                                  (e.target.style.background = '#ECDCBF')
+                                }
+                              >
+                                Upload
+                              </button>
+                            </>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -1641,14 +1879,16 @@ const LabTests = () => {
           <>
             <div style={styles.cardHeader}>
               <h1 style={styles.cardTitle}>Laboratory Orders</h1>
-              <button
-                style={styles.addButton}
-                onClick={() => openModal('addOrder')}
-                onMouseEnter={(e) => (e.target.style.background = '#F8F2DE')}
-                onMouseLeave={(e) => (e.target.style.background = '#ECDCBF')}
-              >
-                Add Lab Order
-              </button>
+              {userRole !== 'patient' && (
+                <button
+                  style={styles.addButton}
+                  onClick={() => openModal('addOrder')}
+                  onMouseEnter={(e) => (e.target.style.background = '#F8F2DE')}
+                  onMouseLeave={(e) => (e.target.style.background = '#ECDCBF')}
+                >
+                  Add Lab Order
+                </button>
+              )}
             </div>
 
             <div style={styles.filterContainer}>
@@ -1676,19 +1916,25 @@ const LabTests = () => {
             <table style={styles.table}>
               <thead>
                 <tr>
-                  <th style={styles.tableHeaderCell}>PATIENT</th>
+                  {userRole !== 'patient' && (
+                    <th style={styles.tableHeaderCell}>PATIENT</th>
+                  )}
                   <th style={styles.tableHeaderCell}>TEST NAME</th>
                   <th style={styles.tableHeaderCell}>DATE</th>
                   <th style={styles.tableHeaderCell}>STATUS</th>
                   <th style={styles.tableHeaderCell}>PRIORITY</th>
-                  <th style={styles.tableHeaderCell}>ORDERED BY</th>
-                  <th style={styles.tableHeaderCell}>ACTIONS</th>
+                  {userRole !== 'patient' && (
+                    <th style={styles.tableHeaderCell}>ORDERED BY</th>
+                  )}
+                  {userRole !== 'patient' && (
+                    <th style={styles.tableHeaderCell}>ACTIONS</th>
+                  )}
                 </tr>
               </thead>
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan="7" style={styles.tableCell}>
+                    <td colSpan={userRole === 'patient' ? 4 : 7} style={styles.tableCell}>
                       <div style={styles.emptyState}>
                         <div style={styles.emptyStateText}>
                           Loading lab orders...
@@ -1698,7 +1944,7 @@ const LabTests = () => {
                   </tr>
                 ) : filteredOrders.length === 0 ? (
                   <tr>
-                    <td colSpan="7" style={styles.tableCell}>
+                    <td colSpan={userRole === 'patient' ? 4 : 7} style={styles.tableCell}>
                       <div style={styles.emptyState}>
                         <div style={styles.emptyStateIcon}>📋</div>
                         <div style={styles.emptyStateText}>
@@ -1849,7 +2095,7 @@ const LabTests = () => {
                       </div>
                     </td>
                   </tr>
-                ) : labFiles.length === 0 ? (
+                ) : filteredLabFiles.length === 0 ? (
                   <tr>
                     <td colSpan="6" style={styles.tableCell}>
                       <div style={styles.emptyState}>
@@ -1861,7 +2107,7 @@ const LabTests = () => {
                     </td>
                   </tr>
                 ) : (
-                  labFiles.map((file) => {
+                  filteredLabFiles.map((file) => {
                     const fileId = file.file_id || file.id;
                     const isDeleting = deletingFiles.has(fileId);
                     return (

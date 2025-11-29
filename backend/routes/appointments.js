@@ -425,12 +425,13 @@ export async function checkAvailabilityForRequest(facility_id, provider_id, sche
       FROM availability_slots
       WHERE facility_id = ? 
         AND slot_date = ?
-        AND start_time <= ?
-        AND end_time >= ?
+        AND start_time = ?
+        AND end_time = ?
         AND slot_status IN ('available')
         AND (lock_status = FALSE OR lock_status IS NULL)
+        AND appointment_id IS NULL
     `;
-    const slotParams = [facility_id, slotDate, endTime, startTime];
+    const slotParams = [facility_id, slotDate, startTime, endTime];
 
     if (provider_id) {
       slotQuery += ' AND provider_id = ?';
@@ -440,21 +441,36 @@ export async function checkAvailabilityForRequest(facility_id, provider_id, sche
     const [slots] = await db.query(slotQuery, slotParams);
     availableSlots = slots;
 
-    // Check if slots are required (if assignments exist for this facility/provider)
+    // Check if slots are required (if assignments exist for this facility/provider on this date)
     const [assignmentCheck] = await db.query(`
       SELECT COUNT(*) as count
       FROM doctor_assignments
       WHERE facility_id = ?
+        AND assignment_date = ?
         ${provider_id ? 'AND doctor_id = ?' : ''}
-    `, provider_id ? [facility_id, provider_id] : [facility_id]);
+    `, provider_id ? [facility_id, slotDate, provider_id] : [facility_id, slotDate]);
 
     const hasAssignments = assignmentCheck[0].count > 0;
     const requiresSlots = hasAssignments;
 
     // Determine availability
+    // If slots are required (assignments exist for this date), we need at least one available slot
+    // If no assignments exist for this date, we only check for conflicts (no slot requirement)
+    // This allows appointments even if slots were truncated, as long as there are no conflicts
     const hasConflicts = conflicts.length > 0 || doctorConflicts.length > 0;
     const hasAvailableSlots = !requiresSlots || availableSlots.length > 0;
     const isAvailable = !hasConflicts && hasAvailableSlots;
+    
+    console.log('🔍 Availability check result:', {
+      hasConflicts,
+      hasAssignments,
+      requiresSlots,
+      hasAvailableSlots,
+      availableSlotsCount: availableSlots.length,
+      conflictsCount: conflicts.length,
+      doctorConflictsCount: doctorConflicts.length,
+      isAvailable
+    });
 
     return {
       available: isAvailable,
@@ -1615,7 +1631,7 @@ router.post('/:id/confirm', authenticateToken, async (req, res) => {
 // GET /api/appointments/availability/slots - Get availability slots
 router.get('/availability/slots', authenticateToken, async (req, res) => {
   try {
-    const { provider_id, facility_id, date, date_from, date_to, status } = req.query;
+    const { provider_id, facility_id, date, date_from, date_to, status, has_assignment } = req.query;
 
     let query = `
       SELECT 
@@ -1656,6 +1672,11 @@ router.get('/availability/slots', authenticateToken, async (req, res) => {
     if (status) {
       query += ' AND s.slot_status = ?';
       params.push(status);
+    }
+
+    // Filter by assignment_id if has_assignment is true
+    if (has_assignment === 'true') {
+      query += ' AND s.assignment_id IS NOT NULL';
     }
 
     if (date) {

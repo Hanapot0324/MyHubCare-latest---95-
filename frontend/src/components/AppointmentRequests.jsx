@@ -307,7 +307,7 @@ const AppointmentRequests = ({ socket }) => {
     setFilteredRequests(filtered);
   };
 
-const handleApprove = async (requestId) => {
+const handleApprove = async (requestId, notes = '', notifyProviderFlag = false) => {
   // IMMEDIATELY update UI (optimistic update) - NO WAITING!
   console.log('⚡ IMMEDIATE UI UPDATE - Approving request:', requestId);
   setRequests(prev => prev.map(req => {
@@ -324,6 +324,7 @@ const handleApprove = async (requestId) => {
   
   // Close modal immediately
   setShowDetailModal(false);
+  setShowApproveModal(false);
   setSelectedRequest(null);
   showToast('Appointment request approved successfully', 'success');
   
@@ -338,7 +339,11 @@ const handleApprove = async (requestId) => {
       headers: {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json'
-      }
+      },
+      body: JSON.stringify({
+        review_notes: notes || null,
+        notify_provider: notifyProviderFlag
+      })
     });
 
     const data = await response.json();
@@ -551,75 +556,74 @@ const handleDecline = async (requestId) => {
   };
 
   return (
-    <div style={{ padding: '20px', backgroundColor: 'white', minHeight: '100vh', paddingTop: '100px' }}>
+    <div style={{ padding: '20px', paddingTop: '100px', backgroundColor: 'white', minHeight: '100vh' }}>
       {/* Header */}
-      <div style={{ 
-        marginBottom: '30px', 
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center'
-      }}>
+      <div
+        style={{
+          background: 'linear-gradient(to right, #D84040, #A31D1D)',
+          padding: '30px',
+          borderRadius: '12px',
+          marginBottom: '30px',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+        }}
+      >
         <div>
-          <h2 style={{ margin: '0 0 5px 0', color: '#1f2937', fontSize: '24px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span style={{ fontSize: '24px' }}>📋</span>
-            Appointment Requests
+          <h2 style={{ margin: 0, color: 'white', fontSize: '24px', fontWeight: 'bold' }}>
+            📋 Appointment Requests
           </h2>
+          <p style={{ margin: '5px 0 0 0', color: '#F8F2DE', fontSize: '14px' }}>
+            Review and manage patient appointment requests
+          </p>
         </div>
-        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-          <div style={{ position: 'relative' }}>
+      </div>
+
+      {/* Search and Filter */}
+      <div style={{ marginBottom: '20px', position: 'relative' }}>
+        <div style={{ display: 'flex', gap: '15px', flexWrap: 'wrap' }}>
+          <div style={{ flex: 1, minWidth: '300px', position: 'relative' }}>
             <Search
-              size={18}
-              color="#6b7280"
+              size={20}
               style={{
                 position: 'absolute',
-                left: '10px',
+                left: '12px',
                 top: '50%',
                 transform: 'translateY(-50%)',
+                color: '#6c757d',
               }}
             />
             <input
               type="text"
-              placeholder="Search..."
+              placeholder="Search by patient name, provider, facility, or appointment type..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               style={{
-                padding: '8px 12px 8px 36px',
-                border: '1px solid #e5e7eb',
-                borderRadius: '6px',
-                width: '200px',
-                fontSize: '14px'
-              }}
-            />
-          </div>
-          <div style={{ position: 'relative' }}>
-            <Filter
-              size={18}
-              color="#6b7280"
-              style={{
-                position: 'absolute',
-                left: '10px',
-                top: '50%',
-                transform: 'translateY(-50%)',
-              }}
-            />
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              style={{
-                padding: '8px 12px 8px 36px',
-                border: '1px solid #e5e7eb',
-                borderRadius: '6px',
+                width: '100%',
+                padding: '12px 12px 12px 40px',
+                border: '1px solid #ced4da',
+                borderRadius: '8px',
                 fontSize: '14px',
-                appearance: 'none',
-                cursor: 'pointer'
               }}
-            >
-              <option value="pending">Pending</option>
-              <option value="all">All Requests</option>
-              <option value="approved">Approved</option>
-              <option value="declined">Declined</option>
-            </select>
+            />
           </div>
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            style={{
+              padding: '12px 16px',
+              border: '1px solid #ced4da',
+              borderRadius: '8px',
+              fontSize: '14px',
+              cursor: 'pointer',
+              minWidth: '200px',
+            }}
+          >
+            <option value="pending">Pending</option>
+            <option value="all">All Requests</option>
+            <option value="approved">Approved</option>
+            <option value="declined">Declined</option>
+          </select>
         </div>
       </div>
 
@@ -643,220 +647,165 @@ const handleDecline = async (requestId) => {
           <p>No appointment requests found</p>
         </div>
       ) : (
-        <div style={{
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '20px'
-        }}>
+        <div
+          style={{
+            background: 'white',
+            borderRadius: '8px',
+            boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+            overflow: 'hidden',
+          }}
+        >
           {filteredRequests.map(request => (
             <div
               key={request.request_id}
               style={{
+                padding: '20px',
+                borderBottom: '1px solid #e9ecef',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '15px',
                 background: 'white',
-                padding: '24px',
-                borderRadius: '12px',
-                boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-                border: '1px solid #e5e7eb',
-                transition: 'all 0.2s ease',
-                position: 'relative'
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)';
-                e.currentTarget.style.borderColor = '#d1d5db';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.1)';
-                e.currentTarget.style.borderColor = '#e5e7eb';
               }}
             >
-              {/* Status Badge */}
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                marginBottom: '16px',
-                padding: '6px 12px',
-                borderRadius: '6px',
-                background: request.status === 'pending' ? '#fef3c7' : request.status === 'approved' ? '#d1fae5' : '#fee2e2',
-                color: request.status === 'pending' ? '#92400e' : request.status === 'approved' ? '#065f46' : '#991b1b',
-                fontSize: '13px',
-                fontWeight: 'bold',
-                width: 'fit-content'
-              }}>
-                <span style={{ fontSize: '16px' }}>
-                  {request.status === 'pending' ? '🟡' : request.status === 'approved' ? '🟢' : '🔴'}
-                </span>
-                {request.status.toUpperCase()}
-              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+                    <h3 style={{ margin: 0, fontSize: '18px', color: '#A31D1D' }}>
+                      {request.patient_name || 'Unknown Patient'}
+                    </h3>
+                    <span 
+                      style={{
+                        backgroundColor: request.status === 'pending' ? '#ffc107' : request.status === 'approved' ? '#28a745' : '#dc3545',
+                        color: 'white',
+                        padding: '4px 8px',
+                        borderRadius: '4px',
+                        fontSize: '12px',
+                        fontWeight: '600',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px'
+                      }}
+                    >
+                      {request.status === 'pending' ? '⏳' : request.status === 'approved' ? '✓' : '❌'} {request.status.toUpperCase()}
+                    </span>
+                  </div>
+                
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '15px', marginBottom: '10px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#495057' }}>
+                      <Calendar size={16} />
+                      <span>{formatDate(request.requested_date)}</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#495057' }}>
+                      <Clock size={16} />
+                      <span>{request.requested_time ? formatTime(`2000-01-01 ${request.requested_time}`) : 'N/A'}</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#495057' }}>
+                      <MapPin size={16} />
+                      <span>{request.facility_name || 'N/A'}</span>
+                    </div>
+                  </div>
+                  
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '15px', marginBottom: '10px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#495057' }}>
+                      <User size={16} />
+                      <span>Provider: {request.provider_name || 'Not assigned'}</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#495057' }}>
+                      <span>Type: {getAppointmentTypeLabel(request.appointment_type) || 'N/A'}</span>
+                    </div>
+                  </div>
+                  
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#6c757d', fontSize: '14px' }}>
+                    <Clock size={16} />
+                    <span>Submitted: {formatDate(request.created_at)} at {formatTime(request.created_at)}</span>
+                  </div>
+                  
+                  {request.patient_notes && (
+                    <div style={{ marginTop: '10px', fontStyle: 'italic', color: '#6c757d' }}>
+                      "{request.patient_notes}"
+                    </div>
+                  )}
+                </div>
 
-              {/* Request Info */}
-              <div style={{ marginBottom: '20px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '16px' }}>
-                  <div>
-                    <div style={{ fontSize: '16px', fontWeight: '600', color: '#1f2937', marginBottom: '4px' }}>
-                      Patient: {request.patient_name || 'Unknown Patient'}
-                    </div>
-                    <div style={{ fontSize: '13px', color: '#6b7280' }}>
-                      Request ID: REQ-{request.request_id?.slice(-8)?.toUpperCase() || 'N/A'}
-                    </div>
-                  </div>
-                </div>
-                
-                <div style={{ 
-                  height: '1px', 
-                  background: '#e5e7eb', 
-                  marginBottom: '16px' 
-                }}></div>
-                
-                <div style={{ 
-                  display: 'grid', 
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', 
-                  gap: '12px',
-                  marginBottom: '12px'
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px' }}>
-                    <span style={{ fontSize: '16px' }}>📅</span>
-                    <span style={{ fontWeight: '600', color: '#374151' }}>Date:</span>
-                    <span style={{ color: '#6b7280' }}>{formatDate(request.requested_date)}</span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px' }}>
-                    <span style={{ fontSize: '16px' }}>⏰</span>
-                    <span style={{ fontWeight: '600', color: '#374151' }}>Time:</span>
-                    <span style={{ color: '#6b7280' }}>{request.requested_time ? formatTime(`2000-01-01 ${request.requested_time}`) : 'N/A'}</span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px' }}>
-                    <span style={{ fontSize: '16px' }}>🏥</span>
-                    <span style={{ fontWeight: '600', color: '#374151' }}>Branch:</span>
-                    <span style={{ color: '#6b7280' }}>{request.facility_name || 'N/A'}</span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px' }}>
-                    <span style={{ fontSize: '16px' }}>👨‍⚕️</span>
-                    <span style={{ fontWeight: '600', color: '#374151' }}>Provider:</span>
-                    <span style={{ color: '#6b7280' }}>{request.provider_name || 'Not assigned'}</span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px' }}>
-                    <span style={{ fontSize: '16px' }}>📝</span>
-                    <span style={{ fontWeight: '600', color: '#374151' }}>Type:</span>
-                    <span style={{ color: '#6b7280' }}>{getAppointmentTypeLabel(request.appointment_type) || 'N/A'}</span>
-                  </div>
-                </div>
-                
-                {request.patient_notes && (
-                  <div style={{ 
-                    display: 'flex', 
-                    alignItems: 'start', 
-                    gap: '8px', 
-                    fontSize: '14px',
-                    marginTop: '12px',
-                    padding: '12px',
-                    background: '#f9fafb',
-                    borderRadius: '6px'
-                  }}>
-                    <span style={{ fontSize: '16px' }}>💬</span>
-                    <div>
-                      <span style={{ fontWeight: '600', color: '#374151' }}>Patient Notes:</span>
-                      <span style={{ color: '#6b7280', marginLeft: '8px' }}>"{request.patient_notes}"</span>
-                    </div>
-                  </div>
-                )}
-                
-                <div style={{ 
-                  fontSize: '12px', 
-                  color: '#9ca3af', 
-                  marginTop: '16px',
-                  paddingTop: '12px',
-                  borderTop: '1px solid #f3f4f6'
-                }}>
-                  Submitted: {formatDate(request.created_at)} at {formatTime(request.created_at)}
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  {request.status === 'pending' && (
+                    <>
+                      <button
+                        onClick={() => {
+                          setSelectedRequest(request);
+                          setShowDetailModal(true);
+                        }}
+                        style={{
+                          padding: '8px 12px',
+                          background: '#ECDCBF',
+                          color: '#A31D1D',
+                          border: '1px solid #ECDCBF',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                          fontSize: '14px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '5px',
+                          fontWeight: 500,
+                        }}
+                        onMouseEnter={(e) => (e.target.style.background = '#F8F2DE')}
+                        onMouseLeave={(e) => (e.target.style.background = '#ECDCBF')}
+                      >
+                        <Eye size={16} />
+                        View Details
+                      </button>
+                      <button
+                        onClick={() => {
+                          setSelectedRequest(request);
+                          setShowApproveModal(true);
+                        }}
+                        style={{
+                          padding: '8px 12px',
+                          background: '#28a745',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                          fontSize: '14px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '5px',
+                          fontWeight: 500,
+                        }}
+                        onMouseEnter={(e) => (e.target.style.background = '#218838')}
+                        onMouseLeave={(e) => (e.target.style.background = '#28a745')}
+                      >
+                        <CheckCircle size={16} />
+                        Approve
+                      </button>
+                      <button
+                        onClick={() => {
+                          setSelectedRequest(request);
+                          setShowDeclineModal(true);
+                        }}
+                        style={{
+                          padding: '8px 12px',
+                          background: '#D84040',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                          fontSize: '14px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '5px',
+                          fontWeight: 500,
+                        }}
+                        onMouseEnter={(e) => (e.target.style.background = '#A31D1D')}
+                        onMouseLeave={(e) => (e.target.style.background = '#D84040')}
+                      >
+                        <XCircle size={16} />
+                        Decline
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
-
-              {/* Actions */}
-              {request.status === 'pending' && (
-                <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
-                  <button
-                    onClick={() => {
-                      setSelectedRequest(request);
-                      setShowDetailModal(true);
-                    }}
-                    style={{
-                      padding: '8px 16px',
-                      background: '#f3f4f6',
-                      color: '#374151',
-                      border: '1px solid #d1d5db',
-                      borderRadius: '6px',
-                      cursor: 'pointer',
-                      fontSize: '14px',
-                      fontWeight: '600',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      transition: 'all 0.2s ease'
-                    }}
-                    onMouseEnter={(e) => {
-                      e.target.style.background = '#e5e7eb';
-                      e.target.style.borderColor = '#9ca3af';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.target.style.background = '#f3f4f6';
-                      e.target.style.borderColor = '#d1d5db';
-                    }}
-                  >
-                    <Eye size={16} />
-                    View Patient
-                  </button>
-                  <button
-                    onClick={() => {
-                      setSelectedRequest(request);
-                      setShowApproveModal(true);
-                    }}
-                    style={{
-                      padding: '8px 16px',
-                      background: '#10b981',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: '6px',
-                      cursor: 'pointer',
-                      fontSize: '14px',
-                      fontWeight: '600',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      transition: 'all 0.2s ease'
-                    }}
-                    onMouseEnter={(e) => e.target.style.background = '#059669'}
-                    onMouseLeave={(e) => e.target.style.background = '#10b981'}
-                  >
-                    <span>✅</span>
-                    Approve
-                  </button>
-                  <button
-                    onClick={() => {
-                      setSelectedRequest(request);
-                      setShowDeclineModal(true);
-                    }}
-                    style={{
-                      padding: '8px 16px',
-                      background: '#ef4444',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: '6px',
-                      cursor: 'pointer',
-                      fontSize: '14px',
-                      fontWeight: '600',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      transition: 'all 0.2s ease'
-                    }}
-                    onMouseEnter={(e) => e.target.style.background = '#dc2626'}
-                    onMouseLeave={(e) => e.target.style.background = '#ef4444'}
-                  >
-                    <span>❌</span>
-                    Decline
-                  </button>
-                </div>
-              )}
             </div>
           ))}
         </div>
@@ -887,7 +836,7 @@ const handleDecline = async (requestId) => {
             boxShadow: '0 4px 20px rgba(0,0,0,0.15)'
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-              <h2 style={{ margin: 0, color: '#A31D1D' }}>Appointment Request Details</h2>
+              <h2 style={{ margin: 0, color: '#A31D1D', fontWeight: 'bold' }}>Appointment Request Details</h2>
               <button
                 onClick={() => {
                   setShowDetailModal(false);
@@ -901,57 +850,58 @@ const handleDecline = async (requestId) => {
                   padding: '5px'
                 }}
               >
-                <X size={24} color="#6c757d" />
+                <X size={24} color="#A31D1D" />
               </button>
             </div>
 
             {/* Request Details */}
             <div style={{
-              padding: '20px',
-              background: '#f8f9fa',
+              padding: '15px',
+              background: '#F8F2DE',
               borderRadius: '8px',
-              marginBottom: '20px'
+              marginBottom: '20px',
+              border: '1px solid #ECDCBF'
             }}>
-              <div style={{ marginBottom: '15px' }}>
-                <strong style={{ display: 'block', marginBottom: '5px', color: '#333' }}>Patient</strong>
+              <div style={{ marginBottom: '10px' }}>
+                <strong style={{ display: 'block', marginBottom: '5px', color: '#A31D1D' }}>Patient</strong>
                 <span style={{ fontSize: '16px' }}>{selectedRequest.patient_name || 'Unknown'}</span>
               </div>
 
-              <div style={{ marginBottom: '15px' }}>
-                <strong style={{ display: 'block', marginBottom: '5px', color: '#333' }}>Requested Date & Time</strong>
+              <div style={{ marginBottom: '10px' }}>
+                <strong style={{ display: 'block', marginBottom: '5px', color: '#A31D1D' }}>Requested Date & Time</strong>
                 <span style={{ fontSize: '16px' }}>
                   {formatDate(selectedRequest.requested_date)} at {selectedRequest.requested_time ? formatTime(`2000-01-01 ${selectedRequest.requested_time}`) : 'N/A'}
                 </span>
               </div>
 
-              <div style={{ marginBottom: '15px' }}>
-                <strong style={{ display: 'block', marginBottom: '5px', color: '#333' }}>Facility</strong>
+              <div style={{ marginBottom: '10px' }}>
+                <strong style={{ display: 'block', marginBottom: '5px', color: '#A31D1D' }}>Facility</strong>
                 <span style={{ fontSize: '16px' }}>{selectedRequest.facility_name || 'N/A'}</span>
               </div>
 
               {selectedRequest.patient_notes && (
-                <div style={{ marginBottom: '15px' }}>
-                  <strong style={{ display: 'block', marginBottom: '5px', color: '#333' }}>Patient Notes</strong>
+                <div style={{ marginBottom: '10px' }}>
+                  <strong style={{ display: 'block', marginBottom: '5px', color: '#A31D1D' }}>Patient Notes</strong>
                   <span style={{ fontSize: '16px' }}>{selectedRequest.patient_notes}</span>
                 </div>
               )}
 
               {selectedRequest.decline_reason && (
-                <div style={{ marginBottom: '15px' }}>
-                  <strong style={{ display: 'block', marginBottom: '5px', color: '#333' }}>Decline Reason</strong>
+                <div style={{ marginBottom: '10px' }}>
+                  <strong style={{ display: 'block', marginBottom: '5px', color: '#A31D1D' }}>Decline Reason</strong>
                   <span style={{ fontSize: '16px', color: '#dc3545' }}>{selectedRequest.decline_reason}</span>
                 </div>
               )}
 
               {selectedRequest.appointment_id && (
-                <div style={{ marginBottom: '15px' }}>
-                  <strong style={{ display: 'block', marginBottom: '5px', color: '#333' }}>Created Appointment</strong>
+                <div style={{ marginBottom: '10px' }}>
+                  <strong style={{ display: 'block', marginBottom: '5px', color: '#A31D1D' }}>Created Appointment</strong>
                   <span style={{ fontSize: '16px', color: '#28a745' }}>Appointment ID: {selectedRequest.appointment_id}</span>
                 </div>
               )}
 
               <div>
-                <strong style={{ display: 'block', marginBottom: '5px', color: '#333' }}>Status</strong>
+                <strong style={{ display: 'block', marginBottom: '5px', color: '#A31D1D' }}>Status</strong>
                 <div style={{
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -972,7 +922,7 @@ const handleDecline = async (requestId) => {
             {/* Decline Reason Input */}
             {selectedRequest.status === 'pending' && (
               <div style={{ marginBottom: '20px' }}>
-                <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold', color: '#333' }}>
+                <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold', color: '#A31D1D' }}>
                   Decline Reason (if declining)
                 </label>
                 <textarea
@@ -1005,8 +955,8 @@ const handleDecline = async (requestId) => {
                     border: 'none',
                     borderRadius: '4px',
                     cursor: actionLoading ? 'not-allowed' : 'pointer',
-                    fontSize: '16px',
-                    fontWeight: 'bold',
+                    fontSize: '14px',
+                    fontWeight: 600,
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
@@ -1028,23 +978,23 @@ const handleDecline = async (requestId) => {
                   style={{
                     flex: 1,
                     padding: '10px 20px',
-                    background: actionLoading ? '#6c757d' : '#dc3545',
+                    background: actionLoading ? '#6c757d' : '#D84040',
                     color: 'white',
                     border: 'none',
                     borderRadius: '4px',
                     cursor: actionLoading ? 'not-allowed' : 'pointer',
-                    fontSize: '16px',
-                    fontWeight: 'bold',
+                    fontSize: '14px',
+                    fontWeight: 600,
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                     gap: '8px'
                   }}
                   onMouseEnter={(e) => {
-                    if (!actionLoading) e.target.style.background = '#c82333';
+                    if (!actionLoading) e.target.style.background = '#A31D1D';
                   }}
                   onMouseLeave={(e) => {
-                    if (!actionLoading) e.target.style.background = '#dc3545';
+                    if (!actionLoading) e.target.style.background = '#D84040';
                   }}
                 >
                   {actionLoading ? <Loader2 size={18} className="animate-spin" /> : <XCircle size={18} />}
@@ -1079,9 +1029,8 @@ const handleDecline = async (requestId) => {
             boxShadow: '0 4px 20px rgba(0,0,0,0.15)'
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-              <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold', color: '#1f2937', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span>✅</span>
-                Approve Appointment Request
+              <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold', color: '#A31D1D' }}>
+                ✅ Approve Appointment Request
               </h2>
               <button
                 onClick={() => {
@@ -1095,7 +1044,7 @@ const handleDecline = async (requestId) => {
                   padding: '5px'
                 }}
               >
-                <X size={24} color="#6c757d" />
+                <X size={24} color="#A31D1D" />
               </button>
             </div>
 
@@ -1104,11 +1053,11 @@ const handleDecline = async (requestId) => {
             </p>
 
             <div style={{
-              padding: '16px',
-              background: '#f9fafb',
+              padding: '15px',
+              background: '#F8F2DE',
               borderRadius: '8px',
               marginBottom: '20px',
-              border: '1px solid #e5e7eb'
+              border: '1px solid #ECDCBF'
             }}>
               <div style={{ marginBottom: '8px', fontSize: '14px' }}>
                 <strong>Patient:</strong> {selectedRequest.patient_name || 'Unknown'}
@@ -1128,7 +1077,7 @@ const handleDecline = async (requestId) => {
             </div>
 
             <div style={{ marginBottom: '20px' }}>
-              <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold', fontSize: '14px', color: '#1f2937' }}>
+              <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold', fontSize: '14px', color: '#A31D1D' }}>
                 Notes to Patient (Optional)
               </label>
               <textarea
@@ -1176,29 +1125,37 @@ const handleDecline = async (requestId) => {
                 }}
                 style={{
                   padding: '10px 20px',
-                  background: '#6c757d',
-                  color: 'white',
+                  background: '#ECDCBF',
+                  color: '#A31D1D',
                   border: 'none',
-                  borderRadius: '6px',
+                  borderRadius: '4px',
                   cursor: 'pointer',
                   fontSize: '14px',
-                  fontWeight: '600'
+                  fontWeight: 500,
                 }}
+                onMouseEnter={(e) => (e.target.style.background = '#F8F2DE')}
+                onMouseLeave={(e) => (e.target.style.background = '#ECDCBF')}
               >
                 Cancel
               </button>
               <button
-                onClick={() => handleApprove(selectedRequest.request_id, approveNotes)}
+                onClick={() => handleApprove(selectedRequest.request_id, approveNotes, notifyProvider)}
                 disabled={actionLoading}
                 style={{
                   padding: '10px 20px',
-                  background: actionLoading ? '#9ca3af' : '#10b981',
+                  background: actionLoading ? '#9ca3af' : '#28a745',
                   color: 'white',
                   border: 'none',
-                  borderRadius: '6px',
+                  borderRadius: '4px',
                   cursor: actionLoading ? 'not-allowed' : 'pointer',
                   fontSize: '14px',
-                  fontWeight: '600'
+                  fontWeight: 600,
+                }}
+                onMouseEnter={(e) => {
+                  if (!actionLoading) e.target.style.background = '#218838';
+                }}
+                onMouseLeave={(e) => {
+                  if (!actionLoading) e.target.style.background = '#28a745';
                 }}
               >
                 {actionLoading ? 'Processing...' : 'Confirm Approval'}
@@ -1231,9 +1188,8 @@ const handleDecline = async (requestId) => {
             boxShadow: '0 4px 20px rgba(0,0,0,0.15)'
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-              <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold', color: '#1f2937', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span>❌</span>
-                Decline Appointment Request
+              <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold', color: '#A31D1D' }}>
+                ❌ Decline Appointment Request
               </h2>
               <button
                 onClick={() => {
@@ -1248,7 +1204,7 @@ const handleDecline = async (requestId) => {
                   padding: '5px'
                 }}
               >
-                <X size={24} color="#6c757d" />
+                <X size={24} color="#A31D1D" />
               </button>
             </div>
 
@@ -1257,14 +1213,14 @@ const handleDecline = async (requestId) => {
             </p>
 
             <div style={{ marginBottom: '20px' }}>
-              <label style={{ display: 'block', marginBottom: '12px', fontWeight: 'bold', fontSize: '14px', color: '#1f2937' }}>
+              <label style={{ display: 'block', marginBottom: '12px', fontWeight: 'bold', fontSize: '14px', color: '#A31D1D' }}>
                 Reason <span style={{ color: 'red' }}>*</span>
               </label>
               <div style={{
                 padding: '12px',
-                background: '#f9fafb',
+                background: '#F8F2DE',
                 borderRadius: '8px',
-                border: '1px solid #e5e7eb'
+                border: '1px solid #ECDCBF'
               }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', fontSize: '14px', cursor: 'pointer' }}>
                   <input
@@ -1325,7 +1281,7 @@ const handleDecline = async (requestId) => {
             </div>
 
             <div style={{ marginBottom: '20px' }}>
-              <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold', fontSize: '14px', color: '#1f2937' }}>
+              <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold', fontSize: '14px', color: '#A31D1D' }}>
                 Additional Notes {declineReasonType === 'other' && <span style={{ color: 'red' }}>*</span>}
               </label>
               <textarea
@@ -1366,14 +1322,16 @@ const handleDecline = async (requestId) => {
                 }}
                 style={{
                   padding: '10px 20px',
-                  background: '#6c757d',
-                  color: 'white',
+                  background: '#ECDCBF',
+                  color: '#A31D1D',
                   border: 'none',
-                  borderRadius: '6px',
+                  borderRadius: '4px',
                   cursor: 'pointer',
                   fontSize: '14px',
-                  fontWeight: '600'
+                  fontWeight: 500,
                 }}
+                onMouseEnter={(e) => (e.target.style.background = '#F8F2DE')}
+                onMouseLeave={(e) => (e.target.style.background = '#ECDCBF')}
               >
                 Cancel
               </button>
@@ -1382,13 +1340,19 @@ const handleDecline = async (requestId) => {
                 disabled={actionLoading || (!declineReasonType || (declineReasonType === 'other' && !declineAdditionalNotes.trim()))}
                 style={{
                   padding: '10px 20px',
-                  background: actionLoading ? '#9ca3af' : '#ef4444',
+                  background: actionLoading ? '#9ca3af' : '#D84040',
                   color: 'white',
                   border: 'none',
-                  borderRadius: '6px',
+                  borderRadius: '4px',
                   cursor: actionLoading ? 'not-allowed' : 'pointer',
                   fontSize: '14px',
-                  fontWeight: '600'
+                  fontWeight: 600,
+                }}
+                onMouseEnter={(e) => {
+                  if (!actionLoading) e.target.style.background = '#A31D1D';
+                }}
+                onMouseLeave={(e) => {
+                  if (!actionLoading) e.target.style.background = '#D84040';
                 }}
               >
                 {actionLoading ? 'Processing...' : 'Confirm Decline'}
@@ -1404,17 +1368,21 @@ const handleDecline = async (requestId) => {
           position: 'fixed',
           bottom: '20px',
           right: '20px',
-          background: toast.type === 'success' ? '#28a745' : '#dc3545',
+          backgroundColor:
+            toast.type === 'success'
+              ? '#28a745'
+              : toast.type === 'error'
+              ? '#A31D1D'
+              : '#17a2b8',
           color: 'white',
           padding: '16px 20px',
           borderRadius: '8px',
           boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+          zIndex: 10000,
+          maxWidth: '400px',
           display: 'flex',
           alignItems: 'center',
           gap: '12px',
-          minWidth: '300px',
-          zIndex: 9999,
-          animation: 'slideIn 0.3s ease'
         }}>
           {toast.type === 'success' ? (
             <CheckCircle size={20} />

@@ -128,6 +128,58 @@ class ApiService {
     }
   }
   
+  // Get appointment by ID
+  static Future<Map<String, dynamic>> getAppointmentById(String appointmentId) async {
+    try {
+      final headers = await getHeaders();
+      final response = await http.get(
+        Uri.parse('$baseUrl/appointments/$appointmentId'),
+        headers: headers,
+      );
+      
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return {'success': true, 'data': data['data']};
+      }
+      
+      String errorMessage = 'Failed to fetch appointment';
+      try {
+        final errorData = jsonDecode(response.body);
+        errorMessage = errorData['message'] ?? errorMessage;
+      } catch (_) {}
+      
+      return {'success': false, 'message': errorMessage};
+    } catch (e) {
+      return {'success': false, 'message': 'Connection error: ${e.toString()}'};
+    }
+  }
+
+  // Confirm appointment
+  static Future<Map<String, dynamic>> confirmAppointment(String appointmentId) async {
+    try {
+      final headers = await getHeaders();
+      final response = await http.post(
+        Uri.parse('$baseUrl/appointments/$appointmentId/confirm'),
+        headers: headers,
+      );
+      
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        final data = jsonDecode(response.body);
+        return {'success': true, 'data': data['data']};
+      }
+      
+      String errorMessage = 'Failed to confirm appointment';
+      try {
+        final errorData = jsonDecode(response.body);
+        errorMessage = errorData['message'] ?? errorMessage;
+      } catch (_) {}
+      
+      return {'success': false, 'message': errorMessage};
+    } catch (e) {
+      return {'success': false, 'message': 'Connection error: ${e.toString()}'};
+    }
+  }
+
   // Get appointments
   static Future<Map<String, dynamic>> getAppointments({String? date}) async {
     try {
@@ -236,7 +288,97 @@ class ApiService {
     }
   }
 
-  // Create appointment
+  // Get availability slots (like web frontend)
+  static Future<Map<String, dynamic>> getAvailabilitySlots({
+    String? facilityId,
+    String? providerId,
+    String? date,
+    String? dateFrom,
+    String? dateTo,
+    String? status,
+  }) async {
+    try {
+      final headers = await getHeaders();
+      final params = <String, String>{};
+      
+      if (facilityId != null) params['facility_id'] = facilityId;
+      if (providerId != null) params['provider_id'] = providerId;
+      if (date != null) params['date'] = date;
+      if (dateFrom != null) params['date_from'] = dateFrom;
+      if (dateTo != null) params['date_to'] = dateTo;
+      if (status != null) params['status'] = status;
+      
+      final uri = Uri.parse('$baseUrl/appointments/availability/slots').replace(queryParameters: params);
+      print('Fetching availability slots from: $uri');
+      final response = await http.get(uri, headers: headers);
+      
+      print('Availability slots response status: ${response.statusCode}');
+      
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        print('Availability slots response data: ${data['success']}, count: ${(data['data'] ?? []).length}');
+        
+        if (data['success'] == true) {
+          return {'success': true, 'data': data['data'] ?? []};
+        } else {
+          return {
+            'success': false, 
+            'message': data['message'] ?? 'Failed to fetch availability slots'
+          };
+        }
+      }
+      
+      // Try to parse error message
+      String errorMessage = 'Failed to fetch availability slots';
+      try {
+        final errorData = jsonDecode(response.body);
+        errorMessage = errorData['message'] ?? errorMessage;
+      } catch (_) {
+        errorMessage = 'HTTP ${response.statusCode}: ${response.reasonPhrase}';
+      }
+      
+      print('Error fetching availability slots: $errorMessage');
+      return {'success': false, 'message': errorMessage};
+    } catch (e) {
+      print('Exception fetching availability slots: $e');
+      return {'success': false, 'message': 'Connection error: ${e.toString()}'};
+    }
+  }
+
+  // Create appointment request (for patients)
+  static Future<Map<String, dynamic>> createAppointmentRequest(Map<String, dynamic> requestData) async {
+    try {
+      final headers = await getHeaders();
+      final response = await http.post(
+        Uri.parse('$baseUrl/appointment-requests'),
+        headers: headers,
+        body: jsonEncode(requestData),
+      );
+      
+      if (response.statusCode == 201 || response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return {'success': true, 'data': data['data']};
+      }
+      
+      String errorMessage = 'Failed to create appointment request';
+      try {
+        final errorData = jsonDecode(response.body);
+        errorMessage = errorData['message'] ?? errorMessage;
+      } catch (_) {}
+      
+      return {'success': false, 'message': errorMessage};
+    } catch (e) {
+      if (e.toString().contains('Failed host lookup') || e.toString().contains('SocketException')) {
+        return {
+          'success': false, 
+          'message': 'Network error: Cannot connect to server. Please check your internet connection.'
+        };
+      }
+      return {'success': false, 'message': 'Connection error: ${e.toString()}'};
+    }
+  }
+
+  // Create appointment (for staff users)
   static Future<Map<String, dynamic>> createAppointment(Map<String, dynamic> appointmentData) async {
     try {
       final headers = await getHeaders();
@@ -446,6 +588,31 @@ class ApiService {
     }
   }
   
+  // Get lab orders
+  static Future<Map<String, dynamic>> getLabOrders({String? patientId}) async {
+    try {
+      final headers = await getHeaders();
+      String url = '$baseUrl/lab-orders';
+      if (patientId != null) {
+        url += '?patient_id=$patientId';
+      }
+      
+      final response = await http.get(
+        Uri.parse(url),
+        headers: headers,
+      );
+      
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return {'success': true, 'data': data['orders'] ?? data['data'] ?? []};
+      }
+      
+      return {'success': false, 'message': 'Failed to fetch lab orders'};
+    } catch (e) {
+      return {'success': false, 'message': 'Connection error: ${e.toString()}'};
+    }
+  }
+  
   // Get medication reminders
   static Future<Map<String, dynamic>> getMedicationReminders({String? patientId}) async {
     try {
@@ -589,10 +756,11 @@ class ApiService {
     try {
       final headers = await getHeaders();
       String url = '$baseUrl/notifications';
+      // Default to 'all' to match web frontend behavior
       if (type != null) {
         url += '?type=$type';
       } else {
-        url += '?type=in_app';
+        url += '?type=all';
       }
       
       final response = await http.get(
@@ -603,37 +771,112 @@ class ApiService {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         
-        // Handle the response structure: data can be an object with in_app_messages and push_notifications
-        // or it can be a direct array
-        List<dynamic> notifications = [];
+        // Handle the response structure: backend returns { success: true, data: { notifications: [], in_app_messages: [] } }
+        List<dynamic> allNotifications = [];
         
         if (data['success'] == true && data['data'] != null) {
-          if (data['data'] is List) {
-            // Direct array
-            notifications = data['data'];
-          } else if (data['data'] is Map) {
-            // Object with in_app_messages and push_notifications
-            final dataMap = data['data'] as Map<String, dynamic>;
-            if (type == 'in_app' || type == null) {
-              notifications = dataMap['in_app_messages'] ?? [];
-            } else if (type == 'push') {
-              notifications = dataMap['push_notifications'] ?? [];
-            } else {
-              // Combine both for 'all' type
-              final inApp = dataMap['in_app_messages'] ?? [];
-              final push = dataMap['push_notifications'] ?? [];
-              notifications = [...inApp, ...push];
-            }
+          final dataMap = data['data'] as Map<String, dynamic>;
+          
+          // Process notifications from notifications table
+          if (dataMap['notifications'] != null && dataMap['notifications'] is List) {
+            final notifs = (dataMap['notifications'] as List).map((notif) {
+              // Map notification fields to match in_app_messages format for consistency
+              return {
+                'message_id': notif['notification_id'],
+                'notification_id': notif['notification_id'],
+                'subject': notif['title'],
+                'title': notif['title'],
+                'body': notif['message'],
+                'message': notif['message'],
+                'type': notif['type'] ?? 'system',
+                'payload': notif['payload'],
+                'is_read': notif['is_read'] ?? false,
+                'read': notif['is_read'] ?? false,
+                'created_at': notif['created_at'],
+                'sent_at': notif['created_at'],
+                'timestamp': notif['created_at'],
+              };
+            }).toList();
+            allNotifications.addAll(notifs);
           }
+          
+          // Process in-app messages
+          if (dataMap['in_app_messages'] != null && dataMap['in_app_messages'] is List) {
+            final inAppMessages = (dataMap['in_app_messages'] as List).map((msg) {
+              // Ensure consistent field names
+              return {
+                'message_id': msg['message_id'],
+                'notification_id': msg['message_id'],
+                'subject': msg['subject'],
+                'title': msg['subject'],
+                'body': msg['body'],
+                'message': msg['body'],
+                'type': () {
+                  try {
+                    if (msg['payload'] == null) return 'system';
+                    if (msg['payload'] is String) {
+                      final parsed = jsonDecode(msg['payload']);
+                      return parsed['type'] ?? 'system';
+                    } else if (msg['payload'] is Map) {
+                      return msg['payload']['type'] ?? 'system';
+                    }
+                    return 'system';
+                  } catch (e) {
+                    return 'system';
+                  }
+                }(),
+                'payload': msg['payload'],
+                'is_read': msg['is_read'] ?? false,
+                'read': msg['is_read'] ?? false,
+                'created_at': msg['sent_at'] ?? msg['created_at'],
+                'sent_at': msg['sent_at'] ?? msg['created_at'],
+                'timestamp': msg['sent_at'] ?? msg['created_at'],
+              };
+            }).toList();
+            allNotifications.addAll(inAppMessages);
+          }
+          
+          // Filter by type if specified
+          if (type == 'in_app') {
+            // Only return in-app messages (those with subject field)
+            allNotifications = allNotifications.where((n) => n['subject'] != null).toList();
+          } else if (type == 'notifications') {
+            // Only return notifications (those without subject but with title)
+            allNotifications = allNotifications.where((n) => n['title'] != null && n['subject'] == null).toList();
+          }
+          // If type is 'all' or null, return all notifications
+        } else if (data['data'] is List) {
+          // Fallback: direct array response
+          allNotifications = data['data'];
         } else if (data['messages'] != null && data['messages'] is List) {
-          notifications = data['messages'];
+          // Another fallback format
+          allNotifications = data['messages'];
         }
         
-        return {'success': true, 'data': notifications};
+        // Sort by timestamp (newest first)
+        allNotifications.sort((a, b) {
+          final dateA = DateTime.tryParse(a['timestamp'] ?? a['created_at'] ?? a['sent_at'] ?? '') ?? DateTime(1970);
+          final dateB = DateTime.tryParse(b['timestamp'] ?? b['created_at'] ?? b['sent_at'] ?? '') ?? DateTime(1970);
+          return dateB.compareTo(dateA);
+        });
+        
+        return {'success': true, 'data': allNotifications};
       }
       
-      return {'success': false, 'message': 'Failed to fetch notifications'};
+      String errorMessage = 'Failed to fetch notifications';
+      try {
+        final errorData = jsonDecode(response.body);
+        errorMessage = errorData['message'] ?? errorMessage;
+      } catch (_) {}
+      
+      return {'success': false, 'message': '$errorMessage (Status: ${response.statusCode})'};
     } catch (e) {
+      if (e.toString().contains('Failed host lookup') || e.toString().contains('SocketException')) {
+        return {
+          'success': false, 
+          'message': 'Network error: Cannot connect to server. Please check your internet connection.'
+        };
+      }
       return {'success': false, 'message': 'Connection error: ${e.toString()}'};
     }
   }

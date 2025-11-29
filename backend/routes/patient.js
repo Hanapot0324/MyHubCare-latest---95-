@@ -775,4 +775,146 @@ router.get('/by-creator/:userId', authenticateToken, async (req, res) => {
   }
 });
 
+// GET /api/patients/:patientId/medications - Get patient's medications from dispensed prescriptions
+router.get('/:patientId/medications', authenticateToken, async (req, res) => {
+  try {
+    const { patientId } = req.params;
+
+    // Check permissions: patient can only view their own, staff can view any
+    if (req.user.role === 'patient') {
+      const patientIdFromUser = req.user.patient?.patient_id || req.user.patient_id;
+      if (patientIdFromUser !== patientId) {
+        return res.status(403).json({ success: false, message: 'Access denied' });
+      }
+    }
+
+    // Get medications from prescriptions that have been dispensed
+    // When a medication is dispensed, it automatically appears here for refill requests
+    // (Same automatic behavior as reminders - dispense → automatically available for refill)
+    const query = `
+      SELECT DISTINCT
+        m.medication_id,
+        m.medication_name,
+        m.generic_name,
+        m.form,
+        m.strength,
+        m.is_art,
+        pi.prescription_item_id,
+        pi.dosage,
+        pi.frequency,
+        pi.quantity as prescribed_quantity,
+        pi.instructions,
+        p.prescription_id,
+        p.prescription_number,
+        p.start_date,
+        p.end_date,
+        p.status as prescription_status,
+        MAX(de.dispensed_date) as last_dispense_date,
+        SUM(de.quantity_dispensed) as total_dispensed,
+        f.facility_name,
+        u.full_name as prescriber_name
+      FROM prescriptions p
+      INNER JOIN prescription_items pi ON p.prescription_id = pi.prescription_id
+      INNER JOIN medications m ON pi.medication_id = m.medication_id
+      INNER JOIN dispense_events de ON pi.prescription_item_id = de.prescription_item_id
+      LEFT JOIN facilities f ON p.facility_id = f.facility_id
+      LEFT JOIN users u ON p.prescriber_id = u.user_id
+      WHERE p.patient_id = ?
+        AND p.status = 'active'
+        AND de.dispense_id IS NOT NULL
+      GROUP BY 
+        m.medication_id, m.medication_name, m.generic_name, m.form, m.strength, m.is_art,
+        pi.prescription_item_id, pi.dosage, pi.frequency, pi.quantity, pi.instructions,
+        p.prescription_id, p.prescription_number, p.start_date, p.end_date, p.status,
+        f.facility_name, u.full_name
+      ORDER BY MAX(de.dispensed_date) DESC, m.medication_name ASC
+    `;
+
+    const [medications] = await db.query(query, [patientId]);
+
+    // Enhance each medication with adherence data and calculated remaining pills
+    const medicationsWithRefill = await Promise.all(medications.map(async (med) => {
+      let nextRefill = null;
+      let estimatedRemainingPills = null;
+      let adherencePercentage = 0;
+      let daysSinceLastDispense = null;
+      
+      // Calculate remaining pills for dispensed medications
+      // All medications here have been dispensed (from dispense_events)
+      if (med.last_dispense_date && med.total_dispensed) {
+        const lastDispense = new Date(med.last_dispense_date);
+        const today = new Date();
+        daysSinceLastDispense = Math.ceil((today - lastDispense) / (1000 * 60 * 60 * 24));
+        
+        // Calculate next refill date
+        if (med.end_date) {
+          nextRefill = med.end_date;
+        } else {
+          // Calculate based on last dispense and typical 30-day supply
+          lastDispense.setDate(lastDispense.getDate() + 30);
+          nextRefill = lastDispense.toISOString().split('T')[0];
+        }
+
+        // Get adherence data for this prescription
+        if (med.prescription_id) {
+          const [adherenceData] = await db.query(
+            `SELECT 
+              AVG(adherence_percentage) as avg_adherence,
+              COUNT(CASE WHEN taken = TRUE THEN 1 END) as taken_count,
+              COUNT(*) as total_records
+             FROM medication_adherence
+             WHERE prescription_id = ?
+               AND adherence_date >= DATE_SUB(CURRENT_DATE, INTERVAL 30 DAY)`,
+            [med.prescription_id]
+          );
+
+          if (adherenceData.length > 0 && adherenceData[0].avg_adherence) {
+            adherencePercentage = Math.round(adherenceData[0].avg_adherence);
+          }
+        }
+
+        // Estimate remaining pills based on:
+        // - Total dispensed quantity
+        // - Days since last dispense
+        // - Pills per day (estimated from frequency)
+        // - Adherence percentage
+        const pillsPerDay = med.frequency?.toLowerCase().includes('twice') ? 2 :
+                           med.frequency?.toLowerCase().includes('three') ? 3 :
+                           med.frequency?.toLowerCase().includes('four') ? 4 : 1;
+        
+        const expectedConsumed = daysSinceLastDispense * pillsPerDay * (adherencePercentage / 100);
+        estimatedRemainingPills = Math.max(0, Math.round(med.total_dispensed - expectedConsumed));
+      }
+
+      return {
+        ...med,
+        prescription: med.prescription_id ? {
+          prescription_id: med.prescription_id,
+          prescription_number: med.prescription_number,
+          start_date: med.start_date,
+          end_date: med.end_date,
+          status: med.prescription_status,
+        } : null,
+        next_refill: nextRefill,
+        estimated_remaining_pills: estimatedRemainingPills,
+        adherence_percentage: adherencePercentage,
+        days_since_last_dispense: daysSinceLastDispense,
+        is_eligible_for_refill: estimatedRemainingPills !== null && estimatedRemainingPills <= 10,
+      };
+    }));
+
+    res.json({
+      success: true,
+      data: medicationsWithRefill,
+    });
+  } catch (err) {
+    console.error('Error fetching patient medications:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch patient medications',
+      error: process.env.NODE_ENV === 'development' ? err.message : 'Internal server error',
+    });
+  }
+});
+
 export default router;

@@ -23,10 +23,15 @@ router.get('/user/:userId', authenticateToken, async (req, res) => {
         f.facility_name,
         f.facility_type,
         f.is_active as facility_is_active,
-        u.full_name as assigned_by_name
+        u1.full_name,
+        u1.username,
+        u1.email,
+        u1.role,
+        u2.full_name as assigned_by_name
       FROM user_facility_assignments ufa
       LEFT JOIN facilities f ON ufa.facility_id = f.facility_id
-      LEFT JOIN users u ON ufa.assigned_by = u.user_id
+      LEFT JOIN users u1 ON ufa.user_id = u1.user_id
+      LEFT JOIN users u2 ON ufa.assigned_by = u2.user_id
       WHERE ufa.user_id = ?
       ORDER BY ufa.is_primary DESC, ufa.assigned_at DESC`,
       [req.params.userId]

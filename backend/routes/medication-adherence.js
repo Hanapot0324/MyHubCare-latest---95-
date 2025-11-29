@@ -2,13 +2,14 @@ import express from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { db } from '../db.js';
 import { logAudit, getUserInfoForAudit, getClientIp } from '../utils/auditLogger.js';
+import { authenticateToken } from './auth.js';
 import { calculateARPARiskScore } from '../services/arpaService.js';
 
 const router = express.Router();
 
 // Track medication adherence (P4.6)
 // Patient reports medication taken/missed → save to medication_adherence (D4)
-router.post('/', async (req, res) => {
+router.post('/', authenticateToken, async (req, res) => {
   let userInfo = null;
 
   try {
@@ -267,7 +268,7 @@ router.post('/', async (req, res) => {
 
 // Get all adherence records (with optional filters)
 // This must come BEFORE the specific routes like /prescription/:id and /patient/:id
-router.get('/', async (req, res) => {
+router.get('/', authenticateToken, async (req, res) => {
   try {
     const { patient_id, prescription_id, start_date, end_date } = req.query;
 
@@ -282,7 +283,38 @@ router.get('/', async (req, res) => {
 
     const params = [];
 
-    if (patient_id) {
+    // Role-based filtering: Patients only see their own adherence records
+    if (req.user.role === 'patient') {
+      // Get patient_id from user's linked patient record
+      let userPatientId = req.user.patient_id;
+      if (!userPatientId) {
+        // Try to find patient record for this user
+        const [patientRows] = await db.query(`
+          SELECT patient_id FROM patients 
+          WHERE created_by = ? OR email IN (SELECT email FROM users WHERE user_id = ?)
+          LIMIT 1
+        `, [req.user.user_id, req.user.user_id]);
+        
+        if (patientRows.length > 0) {
+          userPatientId = patientRows[0].patient_id;
+        } else {
+          // If no patient record found, return empty results
+          return res.json({
+            success: true,
+            data: [],
+            summary: {
+              total_records: 0,
+              taken_records: 0,
+              missed_records: 0,
+              overall_adherence_percentage: 0,
+            },
+          });
+        }
+      }
+      query += ' AND ma.patient_id = ?';
+      params.push(userPatientId);
+    } else if (patient_id) {
+      // For non-patient roles, allow filtering by patient_id if provided
       query += ' AND ma.patient_id = ?';
       params.push(patient_id);
     }
@@ -481,7 +513,7 @@ router.get('/prescription/:prescription_id/statistics', async (req, res) => {
 
 // Get medication reminders
 // This route must come BEFORE /prescription/:id routes to avoid conflicts
-router.get('/reminders', async (req, res) => {
+router.get('/reminders', authenticateToken, async (req, res) => {
   try {
     const { patient_id, prescription_id, active } = req.query;
 
@@ -498,7 +530,33 @@ router.get('/reminders', async (req, res) => {
 
     const params = [];
 
-    if (patient_id) {
+    // Role-based filtering: Patients only see their own reminders
+    if (req.user.role === 'patient') {
+      // Get patient_id from user's linked patient record
+      let userPatientId = req.user.patient_id;
+      if (!userPatientId) {
+        // Try to find patient record for this user
+        const [patientRows] = await db.query(`
+          SELECT patient_id FROM patients 
+          WHERE created_by = ? OR email IN (SELECT email FROM users WHERE user_id = ?)
+          LIMIT 1
+        `, [req.user.user_id, req.user.user_id]);
+        
+        if (patientRows.length > 0) {
+          userPatientId = patientRows[0].patient_id;
+        } else {
+          // If no patient record found, return empty results
+          return res.json({
+            success: true,
+            data: [],
+            reminders: [],
+          });
+        }
+      }
+      query += ' AND mr.patient_id = ?';
+      params.push(userPatientId);
+    } else if (patient_id) {
+      // For non-patient roles, allow filtering by patient_id if provided
       query += ' AND mr.patient_id = ?';
       params.push(patient_id);
     }

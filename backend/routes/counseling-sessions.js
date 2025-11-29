@@ -9,10 +9,6 @@ const router = express.Router();
 // GET /api/counseling-sessions - Get all counseling sessions with filters
 router.get('/', authenticateToken, async (req, res) => {
   try {
-    if (!['admin', 'physician', 'case_manager', 'nurse'].includes(req.user.role)) {
-      return res.status(403).json({ success: false, message: 'Access denied' });
-    }
-
     const { patient_id, counselor_id, facility_id, session_type, session_date_from, session_date_to } = req.query;
 
     let query = `
@@ -30,7 +26,30 @@ router.get('/', authenticateToken, async (req, res) => {
 
     const params = [];
 
-    if (patient_id) {
+    // Role-based filtering
+    if (req.user.role === 'patient') {
+      // Patients only see their own sessions
+      // Get patient_id from user's linked patient record
+      let userPatientId = req.user.patient_id;
+      if (!userPatientId) {
+        // Try to find patient record for this user
+        const [patientRows] = await db.query(`
+          SELECT patient_id FROM patients 
+          WHERE created_by = ? OR email IN (SELECT email FROM users WHERE user_id = ?)
+          LIMIT 1
+        `, [req.user.user_id, req.user.user_id]);
+        
+        if (patientRows.length > 0) {
+          userPatientId = patientRows[0].patient_id;
+        } else {
+          // If no patient record found, return empty results
+          return res.json({ success: true, sessions: [], data: [] });
+        }
+      }
+      query += ' AND cs.patient_id = ?';
+      params.push(userPatientId);
+    } else if (patient_id) {
+      // For non-patient roles, allow filtering by patient_id if provided
       query += ' AND cs.patient_id = ?';
       params.push(patient_id);
     }
@@ -60,8 +79,8 @@ router.get('/', authenticateToken, async (req, res) => {
       params.push(session_date_to);
     }
 
-    // Filter by role - non-admin users see only their sessions
-    if (req.user.role !== 'admin') {
+    // Filter by role - non-admin staff see only their sessions
+    if (req.user.role !== 'admin' && req.user.role !== 'patient') {
       query += ' AND cs.counselor_id = ?';
       params.push(req.user.user_id);
     }
@@ -70,7 +89,7 @@ router.get('/', authenticateToken, async (req, res) => {
 
     const [sessions] = await db.query(query, params);
 
-    res.json({ success: true, sessions });
+    res.json({ success: true, sessions, data: sessions }); // Alias for compatibility
   } catch (err) {
     console.error('Fetch counseling sessions error:', err);
     console.error('Error details:', err.message);
@@ -100,8 +119,25 @@ router.get('/:id', authenticateToken, async (req, res) => {
       return res.status(404).json({ success: false, message: 'Counseling session not found' });
     }
 
-    // Check access - non-admin users can only see their own sessions
-    if (req.user.role !== 'admin' && sessions[0].counselor_id !== req.user.user_id) {
+    // Check access - role-based access control
+    if (req.user.role === 'patient') {
+      // Patients can only see their own sessions
+      let userPatientId = req.user.patient_id;
+      if (!userPatientId) {
+        const [patientRows] = await db.query(`
+          SELECT patient_id FROM patients 
+          WHERE created_by = ? OR email IN (SELECT email FROM users WHERE user_id = ?)
+          LIMIT 1
+        `, [req.user.user_id, req.user.user_id]);
+        if (patientRows.length > 0) {
+          userPatientId = patientRows[0].patient_id;
+        }
+      }
+      if (sessions[0].patient_id !== userPatientId) {
+        return res.status(403).json({ success: false, message: 'Access denied: You can only view your own sessions' });
+      }
+    } else if (req.user.role !== 'admin' && sessions[0].counselor_id !== req.user.user_id) {
+      // Non-admin staff can only see their own sessions
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 

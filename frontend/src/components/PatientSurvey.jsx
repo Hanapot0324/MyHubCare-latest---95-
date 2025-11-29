@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { MessageSquare, Star, Send, CheckCircle } from 'lucide-react';
+import { MessageSquare, Star, Send, CheckCircle, History, Calendar } from 'lucide-react';
 import { API_BASE_URL } from '../config/api.js';
 
 const PatientSurvey = ({ socket }) => {
@@ -18,11 +18,20 @@ const PatientSurvey = ({ socket }) => {
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState('');
   const [isPatientRole, setIsPatientRole] = useState(false);
+  const [surveyHistory, setSurveyHistory] = useState([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [activeTab, setActiveTab] = useState('submit'); // 'submit' or 'history'
 
   useEffect(() => {
     fetchFacilities();
     fetchCurrentUserPatientId();
   }, []);
+
+  useEffect(() => {
+    if (formData.patient_id && activeTab === 'history') {
+      fetchSurveyHistory();
+    }
+  }, [formData.patient_id, activeTab]);
 
   const fetchCurrentUserPatientId = async () => {
     try {
@@ -162,6 +171,10 @@ const PatientSurvey = ({ socket }) => {
           comments: '',
         });
         setTimeout(() => setSubmitted(false), 5000);
+        // Refresh history if on history tab
+        if (activeTab === 'history' && formData.patient_id) {
+          fetchSurveyHistory();
+        }
       } else {
         setError(data.message || 'Failed to submit survey');
       }
@@ -180,6 +193,68 @@ const PatientSurvey = ({ socket }) => {
     { value: 'unhappy', label: '😞 Unhappy', emoji: '😞' },
     { value: 'very_unhappy', label: '😢 Very Unhappy', emoji: '😢' },
   ];
+
+  const fetchSurveyHistory = async () => {
+    if (!formData.patient_id) return;
+    
+    try {
+      setLoadingHistory(true);
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${API_BASE_URL}/survey-responses/patient/${formData.patient_id}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success) {
+          setSurveyHistory(data.data || []);
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching survey history:', error);
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
+
+  const getSatisfactionEmoji = (satisfaction) => {
+    const emojiMap = {
+      very_happy: '😊',
+      happy: '🙂',
+      neutral: '😐',
+      unhappy: '😞',
+      very_unhappy: '😢',
+    };
+    return emojiMap[satisfaction] || '😐';
+  };
+
+  const getSatisfactionLabel = (satisfaction) => {
+    const labelMap = {
+      very_happy: 'Very Happy',
+      happy: 'Happy',
+      neutral: 'Neutral',
+      unhappy: 'Unhappy',
+      very_unhappy: 'Very Unhappy',
+    };
+    return labelMap[satisfaction] || satisfaction;
+  };
+
+  const renderStars = (rating) => {
+    return (
+      <div style={{ display: 'flex', gap: '2px', alignItems: 'center' }}>
+        {[1, 2, 3, 4, 5].map((star) => (
+          <Star
+            key={star}
+            size={14}
+            fill={star <= rating ? '#FFD700' : '#ddd'}
+            color={star <= rating ? '#FFD700' : '#ddd'}
+          />
+        ))}
+      </div>
+    );
+  };
 
   const StarRating = ({ value, onChange, label }) => (
     <div style={{ marginBottom: '20px' }}>
@@ -270,17 +345,60 @@ const PatientSurvey = ({ socket }) => {
         </div>
       </div>
 
-      <form
-        onSubmit={handleSubmit}
-        style={{
-          background: 'white',
-          borderRadius: '12px',
-          padding: '30px',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-          maxWidth: '800px',
-          margin: '0 auto',
-        }}
-      >
+      {/* Tabs */}
+      <div style={{ marginBottom: '20px', display: 'flex', gap: '10px' }}>
+        <button
+          onClick={() => setActiveTab('submit')}
+          style={{
+            padding: '12px 24px',
+            border: 'none',
+            borderRadius: '8px 8px 0 0',
+            background: activeTab === 'submit' ? '#D84040' : '#f0f0f0',
+            color: activeTab === 'submit' ? 'white' : '#666',
+            cursor: 'pointer',
+            fontSize: '16px',
+            fontWeight: '500',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+          }}
+        >
+          <MessageSquare size={18} />
+          Submit Survey
+        </button>
+        <button
+          onClick={() => setActiveTab('history')}
+          style={{
+            padding: '12px 24px',
+            border: 'none',
+            borderRadius: '8px 8px 0 0',
+            background: activeTab === 'history' ? '#D84040' : '#f0f0f0',
+            color: activeTab === 'history' ? 'white' : '#666',
+            cursor: 'pointer',
+            fontSize: '16px',
+            fontWeight: '500',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+          }}
+        >
+          <History size={18} />
+          My Survey History
+        </button>
+      </div>
+
+      {activeTab === 'submit' ? (
+        <form
+          onSubmit={handleSubmit}
+          style={{
+            background: 'white',
+            borderRadius: '12px',
+            padding: '30px',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+            maxWidth: '800px',
+            margin: '0 auto',
+          }}
+        >
         {error && (
           <div
             style={{
@@ -450,6 +568,105 @@ const PatientSurvey = ({ socket }) => {
           {loading ? 'Submitting...' : 'Submit Survey'}
         </button>
       </form>
+      ) : (
+        <div
+          style={{
+            background: 'white',
+            borderRadius: '12px',
+            padding: '30px',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+            maxWidth: '1000px',
+            margin: '0 auto',
+          }}
+        >
+          <h3 style={{ marginTop: 0, marginBottom: '20px', fontSize: '20px', color: '#333' }}>
+            My Survey History
+          </h3>
+
+          {loadingHistory ? (
+            <p style={{ textAlign: 'center', padding: '40px', color: '#999' }}>Loading survey history...</p>
+          ) : surveyHistory.length === 0 ? (
+            <p style={{ textAlign: 'center', padding: '40px', color: '#999' }}>
+              You haven't submitted any surveys yet. Submit your first survey to see it here!
+            </p>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              {surveyHistory.map((survey) => (
+                <div
+                  key={survey.survey_id}
+                  style={{
+                    border: '1px solid #dee2e6',
+                    borderRadius: '8px',
+                    padding: '20px',
+                    background: '#f8f9fa',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '16px' }}>
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                        <Calendar size={16} color="#666" />
+                        <span style={{ fontSize: '14px', color: '#666' }}>
+                          {new Date(survey.submitted_at).toLocaleString()}
+                        </span>
+                      </div>
+                      {survey.facility_name && (
+                        <div style={{ fontSize: '14px', color: '#666' }}>
+                          Facility: {survey.facility_name}
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ fontSize: '32px', marginBottom: '4px' }}>
+                        {getSatisfactionEmoji(survey.overall_satisfaction)}
+                      </div>
+                      <div style={{ fontSize: '12px', color: '#666' }}>
+                        {getSatisfactionLabel(survey.overall_satisfaction)}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '12px', marginBottom: '16px' }}>
+                    <div>
+                      <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Staff Friendliness</div>
+                      {renderStars(survey.staff_friendliness)}
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Wait Time</div>
+                      {renderStars(survey.wait_time)}
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Cleanliness</div>
+                      {renderStars(survey.facility_cleanliness)}
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Average Score</div>
+                      <div style={{ fontSize: '16px', fontWeight: '500' }}>
+                        {survey.average_score ? parseFloat(survey.average_score).toFixed(2) : 'N/A'} / 5.00
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '16px', alignItems: 'center', marginBottom: '12px' }}>
+                    <div>
+                      <span style={{ fontSize: '12px', color: '#666' }}>Would Recommend: </span>
+                      <span style={{ fontSize: '14px', textTransform: 'capitalize', fontWeight: '500' }}>
+                        {survey.would_recommend}
+                      </span>
+                    </div>
+                  </div>
+
+                  {survey.comments && (
+                    <div style={{ marginTop: '12px', padding: '12px', background: 'white', borderRadius: '6px' }}>
+                      <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Comments:</div>
+                      <div style={{ fontSize: '14px', whiteSpace: 'pre-wrap' }}>{survey.comments}</div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 };

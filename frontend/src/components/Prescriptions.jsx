@@ -12,6 +12,8 @@ import {
   Download,
   Trash2,
   Package,
+  CheckCircle,
+  XCircle,
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
@@ -30,6 +32,7 @@ const Prescriptions = () => {
   const [loading, setLoading] = useState(true);
   const [dispenseItems, setDispenseItems] = useState([]);
   const [inventoryAvailability, setInventoryAvailability] = useState({});
+  const [inventoryAlerts, setInventoryAlerts] = useState([]);
   
   // Data from API
   const [medications, setMedications] = useState([]);
@@ -59,23 +62,23 @@ const Prescriptions = () => {
 
   // Fetch data on component mount
   useEffect(() => {
-    fetchPrescriptions();
-    fetchMedications();
-    fetchFacilities();
     getCurrentUser();
   }, []);
+
+  // Fetch prescriptions and other data after user is loaded
   useEffect(() => {
-    if (userRole === null || userRole === undefined) {
-      return;
+    if (userRole !== null && userRole !== undefined) {
+      fetchPrescriptions();
+      fetchMedications();
+      fetchFacilities();
+      
+      if (userRole !== 'patient') {
+        fetchPatients();
+      } else {
+        setPatients([]);
+      }
     }
-
-    if (userRole === 'patient') {
-      setPatients([]);
-      return;
-    }
-
-    fetchPatients();
-  }, [userRole]);
+  }, [userRole, currentUser]);
 
 
   // Fetch inventory availability when dispense modal opens
@@ -90,7 +93,26 @@ const Prescriptions = () => {
     try {
       setLoading(true);
       const token = localStorage.getItem('token');
-      const response = await fetch(`${API_BASE_URL}/prescriptions`, {
+      
+      // Build query parameters
+      const queryParams = new URLSearchParams();
+      
+      // If user is a patient, filter by their patient_id on the backend
+      if (userRole === 'patient' && currentUser) {
+        const patientId = 
+          currentUser.patient?.patient_id ||
+          currentUser.patient_id ||
+          null;
+        
+        if (patientId) {
+          queryParams.append('patient_id', patientId);
+        }
+      }
+      
+      const queryString = queryParams.toString();
+      const url = `${API_BASE_URL}/prescriptions${queryString ? `?${queryString}` : ''}`;
+      
+      const response = await fetch(url, {
         headers: {
           ...(token && { Authorization: `Bearer ${token}` }),
         },
@@ -162,6 +184,8 @@ const Prescriptions = () => {
             nextRefill: nextRefillDate,
             status: prescription.status,
             facility_name: prescription.facility_name,
+            is_dispensed: prescription.is_dispensed || false,
+            last_dispensed_date: prescription.last_dispensed_date || null,
           };
         });
         setPrescriptions(transformedPrescriptions);
@@ -274,25 +298,63 @@ const Prescriptions = () => {
   // Get current user info
   const getCurrentUser = async () => {
     try {
-      const userStr = localStorage.getItem('user');
-      if (userStr) {
-        const user = JSON.parse(userStr);
+      const token = localStorage.getItem('token');
+      let user = null;
+      
+      // Always fetch from API to ensure we have latest data (especially facility_id for nurses)
+      if (token) {
+        const response = await fetch(`${API_BASE_URL}/auth/me`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success && data.user) {
+            user = data.user;
+            // Store in localStorage for quick access
+            localStorage.setItem('user', JSON.stringify(user));
+          }
+        }
+      } else {
+        // Fallback to localStorage if no token
+        const userStr = localStorage.getItem('user');
+        if (userStr) {
+          user = JSON.parse(userStr);
+        }
+      }
+
+      if (user) {
         setCurrentUser(user);
         setUserRole(user.role);
-      } else {
-        // Try to fetch from API
-        const token = localStorage.getItem('token');
-        if (token) {
-          const response = await fetch(`${API_BASE_URL}/auth/me`, {
-            headers: {
-              Authorization: `Bearer ${token}`,
-            },
-          });
-          if (response.ok) {
-            const data = await response.json();
-            if (data.success) {
-              setCurrentUser(data.user);
-              setUserRole(data.user.role);
+        
+        // If user is a patient, ensure we have patient_id
+        if (user.role === 'patient') {
+          // Try to get patient_id from nested patient object or direct property
+          let patientId = user.patient?.patient_id || user.patient_id || null;
+          
+          // If not found, try to fetch from profile endpoint
+          if (!patientId && token) {
+            try {
+              const profileResponse = await fetch(`${API_BASE_URL}/profile/me`, {
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                },
+              });
+              if (profileResponse.ok) {
+                const profileData = await profileResponse.json();
+                if (profileData.success && profileData.patient) {
+                  patientId = profileData.patient.patient_id;
+                  // Update currentUser with patient_id
+                  setCurrentUser(prev => ({
+                    ...prev,
+                    patient_id: patientId,
+                    patient: profileData.patient,
+                  }));
+                }
+              }
+            } catch (err) {
+              console.error('Error fetching patient profile:', err);
             }
           }
         }
@@ -386,6 +448,7 @@ const Prescriptions = () => {
       batch_number: '',
       notes: '',
       available_quantity: 0,
+      available_batches: [],
     }));
     setDispenseItems(items);
     setShowDispenseModal(true);
@@ -408,12 +471,13 @@ const Prescriptions = () => {
       }
 
       const availability = {};
+      const batchNumbers = {}; // Store available batches per medication
       
       // Check inventory for each medication
       for (const med of selectedPrescription.medications) {
         try {
           const response = await fetch(
-            `${API_BASE_URL}/inventory?medication_id=${med.medication_id}&facility_id=${facilityId}`,
+            `${API_BASE_URL}/inventory?facility_id=${facilityId}`,
             {
               headers: {
                 ...(token && { Authorization: `Bearer ${token}` }),
@@ -423,14 +487,52 @@ const Prescriptions = () => {
           
           if (response.ok) {
             const data = await response.json();
-            if (data.success && data.data && data.data.length > 0) {
-              const inventory = data.data[0];
-              availability[med.medication_id] = {
-                quantity_on_hand: inventory.quantity_on_hand,
-                reorder_level: inventory.reorder_level,
-                unit: inventory.unit,
-                inventory_id: inventory.inventory_id,
-              };
+            if (data.success && data.data) {
+              // Filter inventory items for this medication
+              const medicationInventory = data.data.filter(
+                inv => inv.medication_id === med.medication_id
+              );
+              
+              if (medicationInventory.length > 0) {
+                // Calculate total quantity across all batches
+                const totalQuantity = medicationInventory.reduce(
+                  (sum, inv) => sum + (inv.quantity_on_hand || 0), 0
+                );
+                
+                // Collect all batches with quantity > 0
+                const availableBatches = medicationInventory
+                  .filter(inv => inv.quantity_on_hand > 0 && inv.batch_number)
+                  .map(inv => ({
+                    batch_number: inv.batch_number,
+                    quantity: inv.quantity_on_hand,
+                    expiry_date: inv.expiry_date,
+                    inventory_id: inv.inventory_id,
+                  }))
+                  .sort((a, b) => {
+                    // Sort by expiry date (earliest first)
+                    if (a.expiry_date && b.expiry_date) {
+                      return new Date(a.expiry_date) - new Date(b.expiry_date);
+                    }
+                    return 0;
+                  });
+                
+                availability[med.medication_id] = {
+                  quantity_on_hand: totalQuantity,
+                  reorder_level: medicationInventory[0].reorder_level || 0,
+                  unit: medicationInventory[0].unit || 'units',
+                  inventory_id: medicationInventory[0].inventory_id,
+                };
+                
+                batchNumbers[med.medication_id] = availableBatches;
+              } else {
+                availability[med.medication_id] = {
+                  quantity_on_hand: 0,
+                  reorder_level: 0,
+                  unit: 'N/A',
+                  inventory_id: null,
+                };
+                batchNumbers[med.medication_id] = [];
+              }
             } else {
               availability[med.medication_id] = {
                 quantity_on_hand: 0,
@@ -438,6 +540,7 @@ const Prescriptions = () => {
                 unit: 'N/A',
                 inventory_id: null,
               };
+              batchNumbers[med.medication_id] = [];
             }
           }
         } catch (error) {
@@ -448,16 +551,18 @@ const Prescriptions = () => {
             unit: 'N/A',
             inventory_id: null,
           };
+          batchNumbers[med.medication_id] = [];
         }
       }
       
       setInventoryAvailability(availability);
       
-      // Update dispense items with available quantities
+      // Update dispense items with available quantities and batches
       setDispenseItems(prevItems => 
         prevItems.map(item => ({
           ...item,
           available_quantity: availability[item.medication_id]?.quantity_on_hand || 0,
+          available_batches: batchNumbers[item.medication_id] || [],
         }))
       );
     } catch (error) {
@@ -468,18 +573,45 @@ const Prescriptions = () => {
   // Handle dispensing medication
   const handleDispense = async () => {
     try {
-      if (!selectedPrescription || !currentUser) {
+      if (!selectedPrescription) {
         setToast({
-          message: 'User information not available',
+          message: 'Prescription not selected',
           type: 'error',
         });
         return;
       }
 
-      // Get nurse_id - try multiple possible fields
-      const nurseId = currentUser.user_id || currentUser.id || currentUser.userId;
+      // Get current user info - refresh if needed
+      let user = currentUser;
+      let nurseId = null;
+      let facilityId = null;
+      const token = localStorage.getItem('token');
+
+      // If currentUser is not available or missing user_id, fetch from API
+      if (!user || !user.user_id) {
+        try {
+          const userResponse = await fetch(`${API_BASE_URL}/auth/me`, {
+            headers: {
+              ...(token && { Authorization: `Bearer ${token}` }),
+            },
+          });
+          
+          if (userResponse.ok) {
+            const userData = await userResponse.json();
+            if (userData.success && userData.user) {
+              user = userData.user;
+              setCurrentUser(user);
+            }
+          }
+        } catch (err) {
+          console.error('Error fetching user info:', err);
+        }
+      }
+
+      // Get nurse_id from user object
+      nurseId = user?.user_id || user?.id || user?.userId;
       if (!nurseId) {
-        console.error('Current user object:', currentUser);
+        console.error('Current user object:', user);
         setToast({
           message: 'User ID not found. Please log out and log back in.',
           type: 'error',
@@ -487,19 +619,25 @@ const Prescriptions = () => {
         return;
       }
 
-      const facilityId = currentUser.facility_id || facilities[0]?.facility_id;
+      // Get facility_id - try user object first, then facilities array
+      facilityId = user?.facility_id || facilities[0]?.facility_id;
       if (!facilityId) {
-        setToast({
-          message: 'No facility assigned. Please contact administrator.',
-          type: 'error',
-        });
-        return;
+        // Try to get from user's facility object
+        if (user?.facility?.facility_id) {
+          facilityId = user.facility.facility_id;
+        } else {
+          setToast({
+            message: 'No facility assigned. Please contact administrator.',
+            type: 'error',
+          });
+          return;
+        }
       }
 
       console.log('Dispense validation:', {
         nurseId,
         facilityId,
-        currentUser,
+        currentUser: user,
         prescription_id: selectedPrescription.prescription_id,
       });
 
@@ -518,7 +656,6 @@ const Prescriptions = () => {
       }
 
       // Get prescription items to get the correct prescription_item_id
-      const token = localStorage.getItem('token');
       const prescriptionResponse = await fetch(
         `${API_BASE_URL}/prescriptions/${selectedPrescription.prescription_id}`,
         {
@@ -569,7 +706,7 @@ const Prescriptions = () => {
 
       console.log('Items to dispense:', itemsToDispense);
       console.log('Request payload:', {
-        nurse_id: currentUser.user_id || currentUser.id,
+        nurse_id: nurseId,
         facility_id: facilityId,
         items: itemsToDispense,
       });
@@ -584,7 +721,7 @@ const Prescriptions = () => {
             ...(token && { Authorization: `Bearer ${token}` }),
           },
           body: JSON.stringify({
-            nurse_id: currentUser.user_id || currentUser.id,
+            nurse_id: nurseId,
             facility_id: facilityId,
             items: itemsToDispense,
           }),
@@ -627,6 +764,15 @@ const Prescriptions = () => {
       setDispenseItems([]);
       setInventoryAvailability({});
       fetchPrescriptions();
+
+      // Trigger reminder refresh for MedicationReminders component
+      // This will notify the MedicationReminders component to reload reminders
+      window.dispatchEvent(new CustomEvent('medicationDispensed', {
+        detail: {
+          prescription_id: selectedPrescription.prescription_id,
+          patient_id: selectedPrescription.patient_id,
+        }
+      }));
     } catch (error) {
       console.error('Error dispensing medication:', error);
       console.error('Error details:', {
@@ -1032,19 +1178,23 @@ const Prescriptions = () => {
   const getFilteredPrescriptions = () => {
     let filtered = prescriptions;
 
+    // Additional client-side filtering for patients (backend should already filter, but this is a safety measure)
     if (userRole === 'patient') {
       const patientId =
+        currentUser?.patient?.patient_id ||
         currentUser?.patient_id ||
         currentUser?.patientId ||
-        currentUser?.id ||
-        currentUser?.user_id;
+        null;
 
-      filtered = patientId
-        ? filtered.filter(
-            (prescription) =>
-              String(prescription.patient_id) === String(patientId)
-          )
-        : [];
+      if (patientId) {
+        filtered = filtered.filter(
+          (prescription) =>
+            String(prescription.patient_id) === String(patientId)
+        );
+      } else {
+        // If patient_id is not found, show empty list
+        filtered = [];
+      }
     }
 
     // Apply search filter
@@ -1233,8 +1383,39 @@ const Prescriptions = () => {
             <strong>Notes:</strong> {prescription.prescriptionNotes}
           </div>
 
-          <div style={{ fontSize: '14px', color: '#A31D1D' }}>
-            <strong>Next Refill:</strong> {prescription.nextRefill}
+          <div style={{ 
+            display: 'flex', 
+            justifyContent: 'space-between', 
+            alignItems: 'center',
+            fontSize: '14px', 
+            color: '#A31D1D' 
+          }}>
+            <div>
+              <strong>Next Refill:</strong> {prescription.nextRefill}
+            </div>
+            <div style={{
+              padding: '4px 12px',
+              borderRadius: '4px',
+              fontSize: '12px',
+              fontWeight: '600',
+              backgroundColor: prescription.is_dispensed ? '#28a745' : '#dc3545',
+              color: 'white',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '4px'
+            }}>
+              {prescription.is_dispensed ? (
+                <>
+                  <CheckCircle size={14} />
+                  Dispensed
+                </>
+              ) : (
+                <>
+                  <XCircle size={14} />
+                  Not Dispensed
+                </>
+              )}
+            </div>
           </div>
         </div>
       );
@@ -2281,27 +2462,59 @@ const Prescriptions = () => {
                             display: 'block',
                             marginBottom: '5px',
                             fontSize: '14px',
+                            fontWeight: 'bold',
                             color: '#A31D1D',
                           }}
                         >
                           Batch Number (Optional)
                         </label>
-                        <input
-                          type="text"
-                          value={item.batch_number}
-                          onChange={(e) => {
-                            const newItems = [...dispenseItems];
-                            newItems[index].batch_number = e.target.value;
-                            setDispenseItems(newItems);
-                          }}
-                          placeholder="Enter batch number"
-                          style={{
-                            width: '100%',
-                            padding: '8px 12px',
-                            border: '1px solid #ced4da',
-                            borderRadius: '4px',
-                          }}
-                        />
+                        {item.available_batches && item.available_batches.length > 0 ? (
+                          <select
+                            value={item.batch_number}
+                            onChange={(e) => {
+                              const newItems = [...dispenseItems];
+                              newItems[index].batch_number = e.target.value;
+                              setDispenseItems(newItems);
+                            }}
+                            style={{
+                              width: '100%',
+                              padding: '8px 12px',
+                              border: '1px solid #ced4da',
+                              borderRadius: '4px',
+                            }}
+                          >
+                            <option value="">Select Batch (or enter manually)</option>
+                            {item.available_batches.map((batch, batchIndex) => (
+                              <option key={batchIndex} value={batch.batch_number}>
+                                {batch.batch_number} 
+                                {batch.expiry_date ? ` (Exp: ${new Date(batch.expiry_date).toLocaleDateString()})` : ''}
+                                {` - Qty: ${batch.quantity}`}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <input
+                            type="text"
+                            value={item.batch_number}
+                            onChange={(e) => {
+                              const newItems = [...dispenseItems];
+                              newItems[index].batch_number = e.target.value;
+                              setDispenseItems(newItems);
+                            }}
+                            placeholder="Enter batch number manually"
+                            style={{
+                              width: '100%',
+                              padding: '8px 12px',
+                              border: '1px solid #ced4da',
+                              borderRadius: '4px',
+                            }}
+                          />
+                        )}
+                        {item.available_batches && item.available_batches.length === 0 && item.available_quantity > 0 && (
+                          <small style={{ color: '#666', fontSize: '12px', display: 'block', marginTop: '4px' }}>
+                            No batches available. Enter batch number manually.
+                          </small>
+                        )}
                       </div>
                     </div>
 

@@ -487,47 +487,144 @@ router.get('/threads', async (req, res) => {
     const statusParams = status ? [status] : ['approved', 'pending'];
     const statusWhere = status ? 'p.status = ?' : 'p.status IN (?, ?)';
     
+    // Check which columns exist to handle both old and new table structures
+    let hasCategoryId = false;
+    let hasPatientId = false;
+    let hasTitle = false;
+    let hasStatus = false;
+    
+    try {
+      const [columns] = await db.query(`
+        SELECT COLUMN_NAME 
+        FROM information_schema.COLUMNS 
+        WHERE TABLE_SCHEMA = DATABASE() 
+        AND TABLE_NAME = 'forum_posts'
+      `);
+      
+      const columnNames = columns.map(col => col.COLUMN_NAME);
+      hasCategoryId = columnNames.includes('category_id');
+      hasPatientId = columnNames.includes('patient_id');
+      hasTitle = columnNames.includes('title');
+      hasStatus = columnNames.includes('status');
+      
+      console.log('[API] Forum columns detected:', { hasCategoryId, hasPatientId, hasTitle, hasStatus });
+    } catch (colErr) {
+      console.error('[API] Error checking columns:', colErr.message);
+    }
+    
+    // Build query based on available columns
     let query = `
       SELECT 
         p.post_id as topic_id,
-        p.title,
-        p.content as description,
-        p.reply_count as post_count,
-        p.view_count as views,
+        p.post_id,
+        ${hasTitle ? 'COALESCE(p.title, "")' : '""'} as title,
+        COALESCE(p.content, '') as description,
+        COALESCE(p.reply_count, 0) as post_count,
+        COALESCE(p.view_count, 0) as views,
+        COALESCE(p.is_pinned, 0) as is_pinned,
+        COALESCE(p.is_locked, 0) as is_locked,
+        ${hasStatus ? 'COALESCE(p.status, "approved")' : '"approved"'} as status,
+        COALESCE(p.is_anonymous, 1) as is_anonymous,
+        ${hasPatientId ? 'p.patient_id' : 'NULL as patient_id'},
         p.created_at,
-        p.updated_at as last_post_at,
-        p.status,
-        c.category_code as category,
-        c.category_name,
+        COALESCE(p.updated_at, p.created_at) as last_post_at`;
+    
+    // Add category join if category_id exists, otherwise use default
+    if (hasCategoryId) {
+      query += `,
+        COALESCE(c.category_code, 'general') as category,
+        COALESCE(c.category_name, 'General') as category_name`;
+    } else {
+      query += `,
+        'general' as category,
+        'General' as category_name`;
+    }
+    
+    // Add author info
+    if (hasPatientId) {
+      query += `,
         CASE 
-          WHEN p.is_anonymous = true THEN 'Anonymous User'
+          WHEN COALESCE(p.is_anonymous, 1) = 1 THEN 'Anonymous User'
           WHEN p.patient_id IS NULL THEN 'Anonymous User'
           ELSE COALESCE(CONCAT(pat.first_name, ' ', pat.last_name), u.full_name, u.username, 'Anonymous User')
         END as username,
         CASE 
-          WHEN p.is_anonymous = true THEN NULL
+          WHEN COALESCE(p.is_anonymous, 1) = 1 THEN NULL
           WHEN p.patient_id IS NULL THEN NULL
           ELSE u.profile_image
         END as profile_image,
         CASE 
-          WHEN p.is_anonymous = true THEN 'Anonymous User'
+          WHEN COALESCE(p.is_anonymous, 1) = 1 THEN 'Anonymous User'
           WHEN p.patient_id IS NULL THEN 'Anonymous User'
           ELSE COALESCE(CONCAT(pat.first_name, ' ', pat.last_name), u.full_name, u.username, 'Anonymous User')
-        END as full_name
-      FROM forum_posts p
-      INNER JOIN forum_categories c ON p.category_id = c.category_id
-      LEFT JOIN patients pat ON p.patient_id = pat.patient_id
-      LEFT JOIN users u ON pat.created_by = u.user_id
-      WHERE ` + statusWhere;
+        END as full_name,
+        pat.created_by as author_id`;
+    } else {
+      // Use old structure with author_id
+      query += `,
+        COALESCE(u.full_name, u.username, 'Anonymous User') as username,
+        u.profile_image,
+        COALESCE(u.full_name, u.username, 'Anonymous User') as full_name,
+        p.author_id`;
+    }
     
-    const params = [...statusParams];
+    query += `
+      FROM forum_posts p`;
     
-    if (category_id) {
+    // Add joins based on available columns
+    if (hasCategoryId) {
+      query += ` LEFT JOIN forum_categories c ON p.category_id = c.category_id`;
+    }
+    
+    if (hasPatientId) {
+      query += ` LEFT JOIN patients pat ON p.patient_id = pat.patient_id
+        LEFT JOIN users u ON pat.created_by = u.user_id`;
+    } else {
+      // Old structure: join directly to users via author_id
+      query += ` LEFT JOIN users u ON p.author_id = u.user_id`;
+    }
+    
+    query += ` WHERE 1=1`;
+    
+    const params = [];
+    
+    // Only filter by status if status column exists (check by trying to use it)
+    // For now, we'll check if status column exists by wrapping in a subquery
+    // If status doesn't exist, we'll just get all posts
+    try {
+      // Check if status column exists
+      const [colCheck] = await db.query(`
+        SELECT COUNT(*) as exists_col 
+        FROM information_schema.COLUMNS 
+        WHERE TABLE_SCHEMA = DATABASE() 
+        AND TABLE_NAME = 'forum_posts' 
+        AND COLUMN_NAME = 'status'
+      `);
+      
+      if (colCheck[0].exists_col > 0) {
+        // Status column exists, use it
+        query += ' AND COALESCE(p.status, "approved") IN (';
+        statusParams.forEach((_, idx) => {
+          query += idx > 0 ? ', ?' : '?';
+          params.push(statusParams[idx]);
+        });
+        query += ')';
+      } else {
+        // Status column doesn't exist, get all posts (they're all "approved" by default)
+        console.log('[API] Status column not found, returning all posts');
+      }
+    } catch (checkErr) {
+      console.error('[API] Error checking status column:', checkErr.message);
+      // Continue without status filter
+    }
+    
+    if (category_id && hasCategoryId) {
       query += ' AND p.category_id = ?';
       params.push(category_id);
     }
     
-    query += ' ORDER BY p.is_pinned DESC, p.created_at DESC LIMIT ? OFFSET ?';
+    // Order by is_pinned if it exists, otherwise just by created_at
+    query += ' ORDER BY COALESCE(p.is_pinned, 0) DESC, p.created_at DESC LIMIT ? OFFSET ?';
     params.push(parseInt(limit), parseInt(offset));
     
     console.log('[API] Executing query:', query.substring(0, 200) + '...');
@@ -577,6 +674,7 @@ router.get('/threads/:threadId', authenticateToken, async (req, res) => {
         p.is_pinned,
         p.is_locked,
         p.status,
+        p.patient_id,
         p.created_at,
         p.updated_at,
         c.category_id,
@@ -590,7 +688,8 @@ router.get('/threads/:threadId', authenticateToken, async (req, res) => {
         CASE 
           WHEN p.is_anonymous = true THEN NULL
           ELSE u.profile_image
-        END as author_image
+        END as author_image,
+        pat.created_by as author_id
       FROM forum_posts p
       INNER JOIN forum_categories c ON p.category_id = c.category_id
       LEFT JOIN patients pat ON p.patient_id = pat.patient_id
@@ -640,21 +739,28 @@ router.get('/threads/:threadId', authenticateToken, async (req, res) => {
       success: true,
       thread: {
         topic_id: post.post_id,
+        post_id: post.post_id,
         title: post.title,
         description: post.content,
         category: post.category_code,
         created_at: post.created_at,
         username: post.author_name,
         full_name: post.author_name,
-        profile_image: post.author_image
+        profile_image: post.author_image,
+        is_pinned: post.is_pinned,
+        is_locked: post.is_locked,
+        status: post.status,
+        author_id: post.author_id
       },
       posts: replies.map(reply => ({
-        post_id: reply.reply_id,
+        post_id: reply.reply_id || reply.post_id,
+        reply_id: reply.reply_id,
         content: reply.content,
         created_at: reply.created_at,
         username: reply.author_name,
         full_name: reply.author_name,
         profile_image: reply.author_image,
+        author_id: reply.author_id,
         reactions: {},
         user_reactions: []
       }))
@@ -882,5 +988,1086 @@ router.post('/posts/:postId/reactions',
     });
   }
 );
+
+// ==================== ADMIN MODERATION ENDPOINTS ====================
+
+// PUT /api/forum/posts/:postId/approve - Approve a pending post (Admin only)
+router.put('/posts/:postId/approve', authenticateToken, async (req, res) => {
+  try {
+    // Check if user is admin
+    if (req.user.role !== 'admin' && req.user.role !== 'super_admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Admin access required'
+      });
+    }
+
+    const { postId } = req.params;
+    console.log(`[API] Approving post ${postId} by admin ${req.user.user_id}`);
+
+    // Check if post exists
+    const [posts] = await db.query(
+      'SELECT post_id, status FROM forum_posts WHERE post_id = ?',
+      [postId]
+    );
+
+    if (posts.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Post not found'
+      });
+    }
+
+    // Update post status
+    await db.query(
+      'UPDATE forum_posts SET status = ?, updated_at = NOW() WHERE post_id = ?',
+      ['approved', postId]
+    );
+
+    // Log audit entry
+    await logAudit({
+      user_id: req.user.user_id,
+      user_name: req.user.full_name || req.user.username,
+      user_role: req.user.role,
+      action: 'UPDATE',
+      module: 'Forum',
+      entity_type: 'forum_post',
+      entity_id: postId,
+      record_id: postId,
+      new_value: { status: 'approved' },
+      change_summary: `Post ${postId} approved by admin`,
+      ip_address: getClientIp(req),
+      user_agent: req.headers['user-agent'] || 'unknown',
+      status: 'success',
+    });
+
+    res.json({
+      success: true,
+      message: 'Post approved successfully'
+    });
+  } catch (error) {
+    console.error('[API] Error approving post:', error.message);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to approve post',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// PUT /api/forum/posts/:postId/reject - Reject a pending post (Admin only)
+router.put('/posts/:postId/reject', 
+  authenticateToken,
+  [
+    body('reason').optional().trim().isLength({ max: 500 }),
+  ],
+  async (req, res) => {
+    try {
+      // Check if user is admin
+      if (req.user.role !== 'admin' && req.user.role !== 'super_admin') {
+        return res.status(403).json({
+          success: false,
+          message: 'Admin access required'
+        });
+      }
+
+      const { postId } = req.params;
+      const { reason } = req.body;
+      console.log(`[API] Rejecting post ${postId} by admin ${req.user.user_id}`);
+
+      // Check if post exists
+      const [posts] = await db.query(
+        'SELECT post_id, status FROM forum_posts WHERE post_id = ?',
+        [postId]
+      );
+
+      if (posts.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Post not found'
+        });
+      }
+
+      // Update post status
+      await db.query(
+        'UPDATE forum_posts SET status = ?, updated_at = NOW() WHERE post_id = ?',
+        ['rejected', postId]
+      );
+
+      // Log audit entry
+      await logAudit({
+        user_id: req.user.user_id,
+        user_name: req.user.full_name || req.user.username,
+        user_role: req.user.role,
+        action: 'UPDATE',
+        module: 'Forum',
+        entity_type: 'forum_post',
+        entity_id: postId,
+        record_id: postId,
+        new_value: { status: 'rejected', reason },
+        change_summary: `Post ${postId} rejected by admin${reason ? ': ' + reason : ''}`,
+        ip_address: getClientIp(req),
+        user_agent: req.headers['user-agent'] || 'unknown',
+        status: 'success',
+      });
+
+      res.json({
+        success: true,
+        message: 'Post rejected successfully'
+      });
+    } catch (error) {
+      console.error('[API] Error rejecting post:', error.message);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to reject post',
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
+  }
+);
+
+// PUT /api/forum/replies/:replyId/approve - Approve a pending reply (Admin only)
+router.put('/replies/:replyId/approve', authenticateToken, async (req, res) => {
+  try {
+    // Check if user is admin
+    if (req.user.role !== 'admin' && req.user.role !== 'super_admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Admin access required'
+      });
+    }
+
+    const { replyId } = req.params;
+    console.log(`[API] Approving reply ${replyId} by admin ${req.user.user_id}`);
+
+    // Check if reply exists
+    const [replies] = await db.query(
+      'SELECT reply_id, post_id, status FROM forum_replies WHERE reply_id = ?',
+      [replyId]
+    );
+
+    if (replies.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Reply not found'
+      });
+    }
+
+    // Update reply status
+    await db.query(
+      'UPDATE forum_replies SET status = ? WHERE reply_id = ?',
+      ['approved', replyId]
+    );
+
+    // Log audit entry
+    await logAudit({
+      user_id: req.user.user_id,
+      user_name: req.user.full_name || req.user.username,
+      user_role: req.user.role,
+      action: 'UPDATE',
+      module: 'Forum',
+      entity_type: 'forum_reply',
+      entity_id: replyId,
+      record_id: replyId,
+      new_value: { status: 'approved' },
+      change_summary: `Reply ${replyId} approved by admin`,
+      ip_address: getClientIp(req),
+      user_agent: req.headers['user-agent'] || 'unknown',
+      status: 'success',
+    });
+
+    res.json({
+      success: true,
+      message: 'Reply approved successfully'
+    });
+  } catch (error) {
+    console.error('[API] Error approving reply:', error.message);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to approve reply',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// PUT /api/forum/replies/:replyId/reject - Reject a pending reply (Admin only)
+router.put('/replies/:replyId/reject', 
+  authenticateToken,
+  [
+    body('reason').optional().trim().isLength({ max: 500 }),
+  ],
+  async (req, res) => {
+    try {
+      // Check if user is admin
+      if (req.user.role !== 'admin' && req.user.role !== 'super_admin') {
+        return res.status(403).json({
+          success: false,
+          message: 'Admin access required'
+        });
+      }
+
+      const { replyId } = req.params;
+      const { reason } = req.body;
+      console.log(`[API] Rejecting reply ${replyId} by admin ${req.user.user_id}`);
+
+      // Check if reply exists
+      const [replies] = await db.query(
+        'SELECT reply_id, status FROM forum_replies WHERE reply_id = ?',
+        [replyId]
+      );
+
+      if (replies.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Reply not found'
+        });
+      }
+
+      // Update reply status
+      await db.query(
+        'UPDATE forum_replies SET status = ? WHERE reply_id = ?',
+        ['rejected', replyId]
+      );
+
+      // Log audit entry
+      await logAudit({
+        user_id: req.user.user_id,
+        user_name: req.user.full_name || req.user.username,
+        user_role: req.user.role,
+        action: 'UPDATE',
+        module: 'Forum',
+        entity_type: 'forum_reply',
+        entity_id: replyId,
+        record_id: replyId,
+        new_value: { status: 'rejected', reason },
+        change_summary: `Reply ${replyId} rejected by admin${reason ? ': ' + reason : ''}`,
+        ip_address: getClientIp(req),
+        user_agent: req.headers['user-agent'] || 'unknown',
+        status: 'success',
+      });
+
+      res.json({
+        success: true,
+        message: 'Reply rejected successfully'
+      });
+    } catch (error) {
+      console.error('[API] Error rejecting reply:', error.message);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to reject reply',
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
+  }
+);
+
+// ==================== POST MANAGEMENT ENDPOINTS ====================
+
+// PUT /api/forum/posts/:postId - Update a post
+router.put('/posts/:postId',
+  authenticateToken,
+  [
+    body('title').optional().trim().isLength({ min: 3, max: 200 }),
+    body('content').optional().trim().isLength({ min: 10, max: 5000 }),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    try {
+      const { postId } = req.params;
+      const { title, content } = req.body;
+      const userId = req.user.user_id;
+
+      // Check if post exists and user has permission
+      const [posts] = await db.query(`
+        SELECT p.*, pat.created_by as patient_created_by
+        FROM forum_posts p
+        LEFT JOIN patients pat ON p.patient_id = pat.patient_id
+        WHERE p.post_id = ?
+      `, [postId]);
+
+      if (posts.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Post not found'
+        });
+      }
+
+      const post = posts[0];
+      const isAdmin = req.user.role === 'admin' || req.user.role === 'super_admin';
+      const isOwner = post.patient_id && post.patient_created_by === userId;
+
+      // Only admin or post owner can update
+      if (!isAdmin && !isOwner) {
+        return res.status(403).json({
+          success: false,
+          message: 'You do not have permission to update this post'
+        });
+      }
+
+      // Build update query
+      const updates = [];
+      const params = [];
+
+      if (title) {
+        updates.push('title = ?');
+        params.push(title);
+      }
+      if (content) {
+        updates.push('content = ?');
+        params.push(content);
+      }
+
+      if (updates.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'No fields to update'
+        });
+      }
+
+      updates.push('updated_at = NOW()');
+      params.push(postId);
+
+      await db.query(
+        `UPDATE forum_posts SET ${updates.join(', ')} WHERE post_id = ?`,
+        params
+      );
+
+      // Log audit entry
+      await logAudit({
+        user_id: userId,
+        user_name: req.user.full_name || req.user.username,
+        user_role: req.user.role,
+        action: 'UPDATE',
+        module: 'Forum',
+        entity_type: 'forum_post',
+        entity_id: postId,
+        record_id: postId,
+        new_value: { title, content: content ? content.substring(0, 100) + '...' : undefined },
+        change_summary: `Post ${postId} updated`,
+        ip_address: getClientIp(req),
+        user_agent: req.headers['user-agent'] || 'unknown',
+        status: 'success',
+      });
+
+      res.json({
+        success: true,
+        message: 'Post updated successfully'
+      });
+    } catch (error) {
+      console.error('[API] Error updating post:', error.message);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to update post',
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
+  }
+);
+
+// DELETE /api/forum/posts/:postId - Delete a post
+router.delete('/posts/:postId', authenticateToken, async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const userId = req.user.user_id;
+
+    // Check if post exists and user has permission
+    const [posts] = await db.query(`
+      SELECT p.*, pat.created_by as patient_created_by
+      FROM forum_posts p
+      LEFT JOIN patients pat ON p.patient_id = pat.patient_id
+      WHERE p.post_id = ?
+    `, [postId]);
+
+    if (posts.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Post not found'
+      });
+    }
+
+    const post = posts[0];
+    const isAdmin = req.user.role === 'admin' || req.user.role === 'super_admin';
+    const isOwner = post.patient_id && post.patient_created_by === userId;
+
+    // Only admin or post owner can delete
+    if (!isAdmin && !isOwner) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to delete this post'
+      });
+    }
+
+    // Delete post (cascade will handle replies)
+    await db.query('DELETE FROM forum_posts WHERE post_id = ?', [postId]);
+
+    // Log audit entry
+    await logAudit({
+      user_id: userId,
+      user_name: req.user.full_name || req.user.username,
+      user_role: req.user.role,
+      action: 'DELETE',
+      module: 'Forum',
+      entity_type: 'forum_post',
+      entity_id: postId,
+      record_id: postId,
+      old_value: {
+        title: post.title,
+        content: post.content ? post.content.substring(0, 100) + '...' : ''
+      },
+      change_summary: `Post ${postId} deleted`,
+      ip_address: getClientIp(req),
+      user_agent: req.headers['user-agent'] || 'unknown',
+      status: 'success',
+    });
+
+    res.json({
+      success: true,
+      message: 'Post deleted successfully'
+    });
+  } catch (error) {
+    console.error('[API] Error deleting post:', error.message);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete post',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// PUT /api/forum/posts/:postId/pin - Pin/unpin a post (Admin only)
+router.put('/posts/:postId/pin', authenticateToken, async (req, res) => {
+  try {
+    // Check if user is admin
+    if (req.user.role !== 'admin' && req.user.role !== 'super_admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Admin access required'
+      });
+    }
+
+    const { postId } = req.params;
+    const { is_pinned } = req.body;
+
+    // Check if post exists
+    const [posts] = await db.query(
+      'SELECT post_id, is_pinned FROM forum_posts WHERE post_id = ?',
+      [postId]
+    );
+
+    if (posts.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Post not found'
+      });
+    }
+
+    // Update pin status
+    await db.query(
+      'UPDATE forum_posts SET is_pinned = ?, updated_at = NOW() WHERE post_id = ?',
+      [is_pinned ? 1 : 0, postId]
+    );
+
+    // Log audit entry
+    await logAudit({
+      user_id: req.user.user_id,
+      user_name: req.user.full_name || req.user.username,
+      user_role: req.user.role,
+      action: 'UPDATE',
+      module: 'Forum',
+      entity_type: 'forum_post',
+      entity_id: postId,
+      record_id: postId,
+      new_value: { is_pinned: is_pinned ? true : false },
+      change_summary: `Post ${postId} ${is_pinned ? 'pinned' : 'unpinned'}`,
+      ip_address: getClientIp(req),
+      user_agent: req.headers['user-agent'] || 'unknown',
+      status: 'success',
+    });
+
+    res.json({
+      success: true,
+      message: `Post ${is_pinned ? 'pinned' : 'unpinned'} successfully`
+    });
+  } catch (error) {
+    console.error('[API] Error pinning/unpinning post:', error.message);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update pin status',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// PUT /api/forum/posts/:postId/lock - Lock/unlock a post (Admin only)
+router.put('/posts/:postId/lock', authenticateToken, async (req, res) => {
+  try {
+    // Check if user is admin
+    if (req.user.role !== 'admin' && req.user.role !== 'super_admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Admin access required'
+      });
+    }
+
+    const { postId } = req.params;
+    const { is_locked } = req.body;
+
+    // Check if post exists
+    const [posts] = await db.query(
+      'SELECT post_id, is_locked FROM forum_posts WHERE post_id = ?',
+      [postId]
+    );
+
+    if (posts.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Post not found'
+      });
+    }
+
+    // Update lock status
+    await db.query(
+      'UPDATE forum_posts SET is_locked = ?, updated_at = NOW() WHERE post_id = ?',
+      [is_locked ? 1 : 0, postId]
+    );
+
+    // Log audit entry
+    await logAudit({
+      user_id: req.user.user_id,
+      user_name: req.user.full_name || req.user.username,
+      user_role: req.user.role,
+      action: 'UPDATE',
+      module: 'Forum',
+      entity_type: 'forum_post',
+      entity_id: postId,
+      record_id: postId,
+      new_value: { is_locked: is_locked ? true : false },
+      change_summary: `Post ${postId} ${is_locked ? 'locked' : 'unlocked'}`,
+      ip_address: getClientIp(req),
+      user_agent: req.headers['user-agent'] || 'unknown',
+      status: 'success',
+    });
+
+    res.json({
+      success: true,
+      message: `Post ${is_locked ? 'locked' : 'unlocked'} successfully`
+    });
+  } catch (error) {
+    console.error('[API] Error locking/unlocking post:', error.message);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update lock status',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// ==================== REPLY MANAGEMENT ENDPOINTS ====================
+
+// PUT /api/forum/replies/:replyId - Update a reply
+router.put('/replies/:replyId',
+  authenticateToken,
+  [
+    body('content').trim().isLength({ min: 1, max: 2000 }).withMessage('Content must be 1-2000 characters'),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    try {
+      const { replyId } = req.params;
+      const { content } = req.body;
+      const userId = req.user.user_id;
+
+      // Check if reply exists and user has permission
+      const [replies] = await db.query(`
+        SELECT r.*, pat.created_by as patient_created_by
+        FROM forum_replies r
+        LEFT JOIN patients pat ON r.patient_id = pat.patient_id
+        WHERE r.reply_id = ?
+      `, [replyId]);
+
+      if (replies.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Reply not found'
+        });
+      }
+
+      const reply = replies[0];
+      const isAdmin = req.user.role === 'admin' || req.user.role === 'super_admin';
+      const isOwner = reply.patient_id && reply.patient_created_by === userId;
+
+      // Only admin or reply owner can update
+      if (!isAdmin && !isOwner) {
+        return res.status(403).json({
+          success: false,
+          message: 'You do not have permission to update this reply'
+        });
+      }
+
+      // Update reply
+      await db.query(
+        'UPDATE forum_replies SET content = ? WHERE reply_id = ?',
+        [content, replyId]
+      );
+
+      // Log audit entry
+      await logAudit({
+        user_id: userId,
+        user_name: req.user.full_name || req.user.username,
+        user_role: req.user.role,
+        action: 'UPDATE',
+        module: 'Forum',
+        entity_type: 'forum_reply',
+        entity_id: replyId,
+        record_id: replyId,
+        new_value: { content: content.substring(0, 100) + '...' },
+        change_summary: `Reply ${replyId} updated`,
+        ip_address: getClientIp(req),
+        user_agent: req.headers['user-agent'] || 'unknown',
+        status: 'success',
+      });
+
+      res.json({
+        success: true,
+        message: 'Reply updated successfully'
+      });
+    } catch (error) {
+      console.error('[API] Error updating reply:', error.message);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to update reply',
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
+  }
+);
+
+// DELETE /api/forum/replies/:replyId - Delete a reply
+router.delete('/replies/:replyId', authenticateToken, async (req, res) => {
+  try {
+    const { replyId } = req.params;
+    const userId = req.user.user_id;
+
+    // Check if reply exists and user has permission
+    const [replies] = await db.query(`
+      SELECT r.*, pat.created_by as patient_created_by, r.post_id
+      FROM forum_replies r
+      LEFT JOIN patients pat ON r.patient_id = pat.patient_id
+      WHERE r.reply_id = ?
+    `, [replyId]);
+
+    if (replies.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Reply not found'
+      });
+    }
+
+    const reply = replies[0];
+    const isAdmin = req.user.role === 'admin' || req.user.role === 'super_admin';
+    const isOwner = reply.patient_id && reply.patient_created_by === userId;
+
+    // Only admin or reply owner can delete
+    if (!isAdmin && !isOwner) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to delete this reply'
+      });
+    }
+
+    // Delete reply
+    await db.query('DELETE FROM forum_replies WHERE reply_id = ?', [replyId]);
+
+    // Update reply count on post
+    await db.query(`
+      UPDATE forum_posts 
+      SET reply_count = GREATEST(0, reply_count - 1), updated_at = NOW() 
+      WHERE post_id = ?
+    `, [reply.post_id]);
+
+    // Log audit entry
+    await logAudit({
+      user_id: userId,
+      user_name: req.user.full_name || req.user.username,
+      user_role: req.user.role,
+      action: 'DELETE',
+      module: 'Forum',
+      entity_type: 'forum_reply',
+      entity_id: replyId,
+      record_id: replyId,
+      old_value: {
+        content: reply.content ? reply.content.substring(0, 100) + '...' : ''
+      },
+      change_summary: `Reply ${replyId} deleted`,
+      ip_address: getClientIp(req),
+      user_agent: req.headers['user-agent'] || 'unknown',
+      status: 'success',
+    });
+
+    res.json({
+      success: true,
+      message: 'Reply deleted successfully'
+    });
+  } catch (error) {
+    console.error('[API] Error deleting reply:', error.message);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete reply',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// ==================== CATEGORY MANAGEMENT ENDPOINTS (Admin) ====================
+
+// POST /api/forum/categories - Create a new category (Admin only)
+router.post('/categories',
+  authenticateToken,
+  [
+    body('category_name').trim().isLength({ min: 3, max: 100 }).withMessage('Category name must be 3-100 characters'),
+    body('category_code').trim().isLength({ min: 2, max: 50 }).withMessage('Category code must be 2-50 characters'),
+    body('description').optional().trim().isLength({ max: 500 }),
+    body('icon').optional().trim().isLength({ max: 10 }),
+  ],
+  async (req, res) => {
+    // Check if user is admin
+    if (req.user.role !== 'admin' && req.user.role !== 'super_admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Admin access required'
+      });
+    }
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    try {
+      const { category_name, category_code, description, icon } = req.body;
+      const categoryId = uuidv4();
+
+      // Check if category_code already exists
+      const [existing] = await db.query(
+        'SELECT category_id FROM forum_categories WHERE category_code = ?',
+        [category_code]
+      );
+
+      if (existing.length > 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Category code already exists'
+        });
+      }
+
+      // Create category
+      await db.query(`
+        INSERT INTO forum_categories (category_id, category_name, category_code, description, icon, is_active, created_at)
+        VALUES (?, ?, ?, ?, ?, 1, NOW())
+      `, [categoryId, category_name, category_code, description || null, icon || null]);
+
+      // Log audit entry
+      await logAudit({
+        user_id: req.user.user_id,
+        user_name: req.user.full_name || req.user.username,
+        user_role: req.user.role,
+        action: 'CREATE',
+        module: 'Forum',
+        entity_type: 'forum_category',
+        entity_id: categoryId,
+        record_id: category_code,
+        new_value: { category_name, category_code, description, icon },
+        change_summary: `New category created: ${category_name}`,
+        ip_address: getClientIp(req),
+        user_agent: req.headers['user-agent'] || 'unknown',
+        status: 'success',
+      });
+
+      res.status(201).json({
+        success: true,
+        message: 'Category created successfully',
+        category_id: categoryId
+      });
+    } catch (error) {
+      console.error('[API] Error creating category:', error.message);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to create category',
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
+  }
+);
+
+// PUT /api/forum/categories/:categoryId - Update a category (Admin only)
+router.put('/categories/:categoryId',
+  authenticateToken,
+  [
+    body('category_name').optional().trim().isLength({ min: 3, max: 100 }),
+    body('description').optional().trim().isLength({ max: 500 }),
+    body('icon').optional().trim().isLength({ max: 10 }),
+    body('is_active').optional().isBoolean(),
+  ],
+  async (req, res) => {
+    // Check if user is admin
+    if (req.user.role !== 'admin' && req.user.role !== 'super_admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Admin access required'
+      });
+    }
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    try {
+      const { categoryId } = req.params;
+      const { category_name, description, icon, is_active } = req.body;
+
+      // Check if category exists
+      const [categories] = await db.query(
+        'SELECT * FROM forum_categories WHERE category_id = ?',
+        [categoryId]
+      );
+
+      if (categories.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Category not found'
+        });
+      }
+
+      // Build update query
+      const updates = [];
+      const params = [];
+
+      if (category_name) {
+        updates.push('category_name = ?');
+        params.push(category_name);
+      }
+      if (description !== undefined) {
+        updates.push('description = ?');
+        params.push(description);
+      }
+      if (icon !== undefined) {
+        updates.push('icon = ?');
+        params.push(icon);
+      }
+      if (is_active !== undefined) {
+        updates.push('is_active = ?');
+        params.push(is_active ? 1 : 0);
+      }
+
+      if (updates.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'No fields to update'
+        });
+      }
+
+      params.push(categoryId);
+
+      await db.query(
+        `UPDATE forum_categories SET ${updates.join(', ')} WHERE category_id = ?`,
+        params
+      );
+
+      // Log audit entry
+      await logAudit({
+        user_id: req.user.user_id,
+        user_name: req.user.full_name || req.user.username,
+        user_role: req.user.role,
+        action: 'UPDATE',
+        module: 'Forum',
+        entity_type: 'forum_category',
+        entity_id: categoryId,
+        record_id: categories[0].category_code,
+        new_value: { category_name, description, icon, is_active },
+        change_summary: `Category ${categoryId} updated`,
+        ip_address: getClientIp(req),
+        user_agent: req.headers['user-agent'] || 'unknown',
+        status: 'success',
+      });
+
+      res.json({
+        success: true,
+        message: 'Category updated successfully'
+      });
+    } catch (error) {
+      console.error('[API] Error updating category:', error.message);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to update category',
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
+  }
+);
+
+// DELETE /api/forum/categories/:categoryId - Delete a category (Admin only)
+router.delete('/categories/:categoryId', authenticateToken, async (req, res) => {
+  try {
+    // Check if user is admin
+    if (req.user.role !== 'admin' && req.user.role !== 'super_admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Admin access required'
+      });
+    }
+
+    const { categoryId } = req.params;
+
+    // Check if category exists
+    const [categories] = await db.query(
+      'SELECT * FROM forum_categories WHERE category_id = ?',
+      [categoryId]
+    );
+
+    if (categories.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Category not found'
+      });
+    }
+
+    // Check if category has posts
+    const [posts] = await db.query(
+      'SELECT COUNT(*) as count FROM forum_posts WHERE category_id = ?',
+      [categoryId]
+    );
+
+    if (posts[0].count > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot delete category with existing posts. Deactivate it instead.'
+      });
+    }
+
+    // Delete category
+    await db.query('DELETE FROM forum_categories WHERE category_id = ?', [categoryId]);
+
+    // Log audit entry
+    await logAudit({
+      user_id: req.user.user_id,
+      user_name: req.user.full_name || req.user.username,
+      user_role: req.user.role,
+      action: 'DELETE',
+      module: 'Forum',
+      entity_type: 'forum_category',
+      entity_id: categoryId,
+      record_id: categories[0].category_code,
+      old_value: {
+        category_name: categories[0].category_name,
+        category_code: categories[0].category_code
+      },
+      change_summary: `Category ${categoryId} deleted`,
+      ip_address: getClientIp(req),
+      user_agent: req.headers['user-agent'] || 'unknown',
+      status: 'success',
+    });
+
+    res.json({
+      success: true,
+      message: 'Category deleted successfully'
+    });
+  } catch (error) {
+    console.error('[API] Error deleting category:', error.message);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete category',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// GET /api/forum/pending - Get pending posts and replies for moderation (Admin only)
+router.get('/pending', authenticateToken, async (req, res) => {
+  try {
+    // Check if user is admin
+    if (req.user.role !== 'admin' && req.user.role !== 'super_admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Admin access required'
+      });
+    }
+
+    const [pendingPosts] = await db.query(`
+      SELECT 
+        p.post_id,
+        p.title,
+        p.content,
+        p.created_at,
+        c.category_name,
+        CASE 
+          WHEN p.is_anonymous = true THEN 'Anonymous User'
+          ELSE COALESCE(CONCAT(pat.first_name, ' ', pat.last_name), u.full_name, u.username)
+        END as author_name
+      FROM forum_posts p
+      INNER JOIN forum_categories c ON p.category_id = c.category_id
+      LEFT JOIN patients pat ON p.patient_id = pat.patient_id
+      LEFT JOIN users u ON pat.created_by = u.user_id
+      WHERE p.status = 'pending'
+      ORDER BY p.created_at DESC
+    `);
+
+    const [pendingReplies] = await db.query(`
+      SELECT 
+        r.reply_id,
+        r.content,
+        r.created_at,
+        p.title as post_title,
+        p.post_id,
+        CASE 
+          WHEN r.is_anonymous = true THEN 'Anonymous User'
+          ELSE COALESCE(CONCAT(pat.first_name, ' ', pat.last_name), u.full_name, u.username)
+        END as author_name
+      FROM forum_replies r
+      INNER JOIN forum_posts p ON r.post_id = p.post_id
+      LEFT JOIN patients pat ON r.patient_id = pat.patient_id
+      LEFT JOIN users u ON pat.created_by = u.user_id
+      WHERE r.status = 'pending'
+      ORDER BY r.created_at DESC
+    `);
+
+    res.json({
+      success: true,
+      pending_posts: pendingPosts,
+      pending_replies: pendingReplies
+    });
+  } catch (error) {
+    console.error('[API] Error fetching pending items:', error.message);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch pending items',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
 
 export default router;

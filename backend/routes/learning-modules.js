@@ -182,15 +182,39 @@ const cleanContent = (html) => {
 router.get('/', async (req, res) => {
   try {
     console.log('[API] GET /api/learning-modules - Fetching all modules');
+    const { category, is_published, search } = req.query;
+    const isUserAdmin = (req.user && (req.user.role === 'admin' || req.user.role === 'super_admin'));
     
-    const query = `
+    let query = `
       SELECT lm.*, u.full_name 
       FROM learning_modules lm
       LEFT JOIN users u ON lm.created_by = u.user_id
-      ORDER BY lm.created_at DESC
+      WHERE 1=1
     `;
+    const params = [];
     
-    const [modules] = await db.query(query);
+    // Non-admin users only see published modules
+    if (!isUserAdmin) {
+      query += ' AND (lm.is_published = 1 OR lm.is_published IS NULL)';
+    } else if (is_published !== undefined) {
+      query += ' AND lm.is_published = ?';
+      params.push(is_published === 'true' ? 1 : 0);
+    }
+    
+    if (category) {
+      query += ' AND lm.category = ?';
+      params.push(category);
+    }
+    
+    if (search) {
+      query += ' AND (lm.title LIKE ? OR lm.description LIKE ?)';
+      const searchTerm = `%${search}%`;
+      params.push(searchTerm, searchTerm);
+    }
+    
+    query += ' ORDER BY lm.created_at DESC';
+    
+    const [modules] = await db.query(query, params);
     
     console.log(`[API] Successfully fetched ${modules.length} modules`);
     res.json({
@@ -212,16 +236,23 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const moduleId = req.params.id;
+    const isUserAdmin = (req.user && (req.user.role === 'admin' || req.user.role === 'super_admin'));
     console.log(`[API] GET /api/learning-modules/${moduleId} - Fetching specific module`);
     
-    const query = `
+    let query = `
       SELECT lm.*, u.full_name 
       FROM learning_modules lm
       LEFT JOIN users u ON lm.created_by = u.user_id
       WHERE lm.id = ?
     `;
+    const params = [moduleId];
     
-    const [modules] = await db.query(query, [moduleId]);
+    // Non-admin users only see published modules
+    if (!isUserAdmin) {
+      query += ' AND (lm.is_published = 1 OR lm.is_published IS NULL)';
+    }
+    
+    const [modules] = await db.query(query, params);
     
     if (modules.length === 0) {
       console.log(`[API] Module not found with ID: ${moduleId}`);
@@ -230,6 +261,9 @@ router.get('/:id', async (req, res) => {
         message: 'Learning module not found'
       });
     }
+    
+    // Increment view count
+    await db.query('UPDATE learning_modules SET view_count = COALESCE(view_count, 0) + 1 WHERE id = ?', [moduleId]);
     
     console.log(`[API] Successfully fetched module: ${modules[0].title}`);
     res.json({
@@ -251,8 +285,11 @@ router.get('/:id', async (req, res) => {
 router.post('/', 
   authenticateToken,
   [
-    body('link_url').isURL().withMessage('Valid URL is required'),
+    body('link_url').optional().isURL().withMessage('Valid URL is required'),
     body('category').optional().isIn(['BASICS', 'LIFESTYLE', 'TREATMENT', 'PREVENTION', 'OTHER']),
+    body('module_type').optional().isIn(['article', 'video', 'infographic', 'pdf']),
+    body('tags').optional().isArray(),
+    body('is_published').optional().isBoolean(),
   ],
   async (req, res) => {
     // Check if user is admin
@@ -276,27 +313,48 @@ router.post('/',
     }
 
     try {
-      const { link_url, category } = req.body;
+      const { link_url, category, module_type = 'article', tags, is_published = false, title, description, content, read_time } = req.body;
       const createdBy = req.user.user_id;
       
-      console.log(`[API] Creating new module with URL: ${link_url}`);
+      let extractedContent = {};
       
-      // Extract content from URL
-      const extractedContent = await extractContentFromUrl(link_url);
-      console.log('[API] Content extraction completed');
+      // If URL provided, extract content
+      if (link_url) {
+        console.log(`[API] Creating new module with URL: ${link_url}`);
+        extractedContent = await extractContentFromUrl(link_url);
+        console.log('[API] Content extraction completed');
+      } else if (!title || !content) {
+        return res.status(400).json({
+          success: false,
+          message: 'Either link_url or title and content are required'
+        });
+      } else {
+        extractedContent = {
+          title: title,
+          description: description || '',
+          content: content,
+          read_time: read_time || '10 min'
+        };
+      }
+      
+      // Convert tags array to JSON string if provided
+      const tagsJson = tags && Array.isArray(tags) ? JSON.stringify(tags) : null;
       
       const [result] = await db.query(`
         INSERT INTO learning_modules 
-        (title, description, category, link_url, read_time, created_by, content) 
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        (title, description, category, link_url, read_time, created_by, content, module_type, tags, is_published, view_count) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
       `, [
         extractedContent.title,
         extractedContent.description,
-        category,
-        link_url,
+        category || 'OTHER',
+        link_url || null,
         extractedContent.read_time,
         createdBy,
-        extractedContent.content
+        extractedContent.content,
+        module_type,
+        tagsJson,
+        is_published ? 1 : 0
       ]);
       
       console.log(`[API] Module created with ID: ${result.insertId}`);
@@ -314,10 +372,11 @@ router.post('/',
         new_value: {
           title: extractedContent.title,
           description: extractedContent.description,
-          category,
-          link_url,
-          read_time: extractedContent.read_time,
-          content: extractedContent.content.substring(0, 100) + '...' // Log only a preview of content
+          category: category || 'OTHER',
+          module_type,
+          tags: tags,
+          is_published,
+          content: extractedContent.content.substring(0, 100) + '...'
         },
         change_summary: `New learning module created: ${extractedContent.title}`,
         ip_address: getClientIp(req),
@@ -349,6 +408,9 @@ router.put('/:id',
   [
     body('link_url').optional().isURL().withMessage('Valid URL is required'),
     body('category').optional().isIn(['BASICS', 'LIFESTYLE', 'TREATMENT', 'PREVENTION', 'OTHER']),
+    body('module_type').optional().isIn(['article', 'video', 'infographic', 'pdf']),
+    body('tags').optional().isArray(),
+    body('is_published').optional().isBoolean(),
   ],
   async (req, res) => {
     // Check if user is admin
@@ -373,9 +435,9 @@ router.put('/:id',
 
     try {
       const moduleId = req.params.id;
-      const { link_url, category, title, description, content, read_time } = req.body;
+      const { link_url, category, module_type, tags, is_published, title, description, content, read_time } = req.body;
       
-      console.log(`[API] Updating module ${moduleId} with URL: ${link_url}`);
+      console.log(`[API] Updating module ${moduleId}`);
       
       // Get current module for audit log
       const [currentModules] = await db.query('SELECT * FROM learning_modules WHERE id = ?', [moduleId]);
@@ -396,8 +458,7 @@ router.put('/:id',
         console.log('[API] URL changed, extracting new content');
         extractedContent = await extractContentFromUrl(link_url);
       } else {
-        // Use existing content if URL hasn't changed
-        console.log('[API] URL not changed, using existing content');
+        // Use provided or existing content
         extractedContent = {
           title: title || currentModule.title,
           description: description || currentModule.description,
@@ -406,20 +467,56 @@ router.put('/:id',
         };
       }
       
+      // Build update query
+      const updates = [];
+      const params = [];
+      
+      updates.push('title = ?');
+      params.push(extractedContent.title);
+      
+      updates.push('description = ?');
+      params.push(extractedContent.description);
+      
+      if (category !== undefined) {
+        updates.push('category = ?');
+        params.push(category);
+      }
+      
+      if (link_url !== undefined) {
+        updates.push('link_url = ?');
+        params.push(link_url);
+      }
+      
+      updates.push('read_time = ?');
+      params.push(extractedContent.read_time);
+      
+      updates.push('content = ?');
+      params.push(extractedContent.content);
+      
+      if (module_type !== undefined) {
+        updates.push('module_type = ?');
+        params.push(module_type);
+      }
+      
+      if (tags !== undefined) {
+        const tagsJson = Array.isArray(tags) ? JSON.stringify(tags) : null;
+        updates.push('tags = ?');
+        params.push(tagsJson);
+      }
+      
+      if (is_published !== undefined) {
+        updates.push('is_published = ?');
+        params.push(is_published ? 1 : 0);
+      }
+      
+      updates.push('updated_at = CURRENT_TIMESTAMP');
+      params.push(moduleId);
+      
       // Update module
-      await db.query(`
-        UPDATE learning_modules 
-        SET title = ?, description = ?, category = ?, link_url = ?, read_time = ?, content = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `, [
-        extractedContent.title,
-        extractedContent.description,
-        category || currentModule.category,
-        link_url || currentModule.link_url,
-        extractedContent.read_time,
-        extractedContent.content,
-        moduleId
-      ]);
+      await db.query(
+        `UPDATE learning_modules SET ${updates.join(', ')} WHERE id = ?`,
+        params
+      );
       
       console.log(`[API] Module ${moduleId} updated successfully`);
       
@@ -437,16 +534,17 @@ router.put('/:id',
           title: currentModule.title,
           description: currentModule.description,
           category: currentModule.category,
-          link_url: currentModule.link_url,
-          read_time: currentModule.read_time,
+          module_type: currentModule.module_type,
+          is_published: currentModule.is_published,
           content: currentModule.content ? currentModule.content.substring(0, 100) + '...' : ''
         },
         new_value: {
           title: extractedContent.title,
           description: extractedContent.description,
-          category: category || currentModule.category,
-          link_url: link_url || currentModule.link_url,
-          read_time: extractedContent.read_time,
+          category: category !== undefined ? category : currentModule.category,
+          module_type: module_type !== undefined ? module_type : currentModule.module_type,
+          is_published: is_published !== undefined ? is_published : currentModule.is_published,
+          tags: tags,
           content: extractedContent.content ? extractedContent.content.substring(0, 100) + '...' : ''
         },
         change_summary: `Learning module updated: ${extractedContent.title}`,

@@ -1,6 +1,6 @@
 // web/src/pages/Referrals.jsx
 import React, { useState, useEffect } from 'react';
-import { X, Plus, Search } from 'lucide-react';
+import { X, Plus, Search, CheckCircle, XCircle, Clock } from 'lucide-react';
 
 const API_URL = 'http://localhost:5000/api';
 
@@ -10,6 +10,7 @@ const Referrals = () => {
   const [facilities, setFacilities] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [urgencyFilter, setUrgencyFilter] = useState('all');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [selectedReferral, setSelectedReferral] = useState(null);
@@ -33,6 +34,9 @@ const Referrals = () => {
       const params = new URLSearchParams();
       if (statusFilter !== 'all') {
         params.append('status', statusFilter.toLowerCase());
+      }
+      if (urgencyFilter !== 'all') {
+        params.append('urgency', urgencyFilter.toLowerCase());
       }
 
       const response = await fetch(`${API_URL}/referrals?${params.toString()}`, {
@@ -145,7 +149,7 @@ const Referrals = () => {
     loadReferrals();
     loadPatients();
     loadFacilities();
-  }, [statusFilter]);
+  }, [statusFilter, urgencyFilter]);
 
   const handleViewDetails = (referral) => {
     setSelectedReferral(referral);
@@ -164,7 +168,12 @@ const Referrals = () => {
       filtered = filtered.filter((r) => {
         const patientName = (r.patient_name || '').toLowerCase();
         const reason = (r.referral_reason || '').toLowerCase();
-        return patientName.includes(searchTerm.toLowerCase()) || reason.includes(searchTerm.toLowerCase());
+        const fromFacility = (r.from_facility_name || '').toLowerCase();
+        const toFacility = (r.to_facility_name || '').toLowerCase();
+        return patientName.includes(searchTerm.toLowerCase()) || 
+               reason.includes(searchTerm.toLowerCase()) ||
+               fromFacility.includes(searchTerm.toLowerCase()) ||
+               toFacility.includes(searchTerm.toLowerCase());
       });
     }
 
@@ -249,8 +258,20 @@ const Referrals = () => {
                 borderRadius: '4px',
                 fontSize: '12px',
                 fontWeight: '500',
-                backgroundColor: '#d1e7dd',
-                color: '#0f5132',
+                backgroundColor: 
+                  referral.status === 'pending' ? '#fff3cd' :
+                  referral.status === 'accepted' ? '#d1e7dd' :
+                  referral.status === 'in_transit' ? '#cfe2ff' :
+                  referral.status === 'completed' ? '#d1e7dd' :
+                  referral.status === 'rejected' ? '#f8d7da' :
+                  '#e2e3e5',
+                color:
+                  referral.status === 'pending' ? '#856404' :
+                  referral.status === 'accepted' ? '#0f5132' :
+                  referral.status === 'in_transit' ? '#084298' :
+                  referral.status === 'completed' ? '#0f5132' :
+                  referral.status === 'rejected' ? '#721c24' :
+                  '#41464b',
               }}
             >
               {referral.status?.toUpperCase() || 'PENDING'}
@@ -370,8 +391,33 @@ const Referrals = () => {
             }}
           >
             <option value="all">All Status</option>
-            <option value="PENDING">Pending</option>
-            <option value="ACCEPTED">Accepted</option>
+            <option value="pending">Pending</option>
+            <option value="accepted">Accepted</option>
+            <option value="in_transit">In Transit</option>
+            <option value="completed">Completed</option>
+            <option value="rejected">Rejected</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+        </div>
+        <div style={{ position: 'relative', marginTop: '8px' }}>
+          <select
+            value={urgencyFilter}
+            onChange={(e) => setUrgencyFilter(e.target.value)}
+            style={{
+              padding: '8px 12px',
+              border: '1px solid #ced4da',
+              borderRadius: '4px',
+              appearance: 'none',
+              fontSize: '14px',
+              backgroundColor: 'white',
+              paddingRight: '30px',
+              width: '100%',
+            }}
+          >
+            <option value="all">All Urgency Levels</option>
+            <option value="routine">Routine</option>
+            <option value="urgent">Urgent</option>
+            <option value="emergency">Emergency</option>
           </select>
         </div>
       </div>
@@ -397,6 +443,7 @@ const Referrals = () => {
         <ReferralDetailsModal
           referral={selectedReferral}
           onClose={() => setShowDetailsModal(false)}
+          onUpdate={loadReferrals}
         />
       )}
     </div>
@@ -802,59 +849,217 @@ const CreateReferralModal = ({ onClose, onSuccess, patients = [], facilities = [
   );
 };
 
-const ReferralDetailsModal = ({ referral, onClose }) => {
+const ReferralDetailsModal = ({ referral, onClose, onUpdate }) => {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [showRejectModal, setShowRejectModal] = useState(false);
+  const [rejectionReason, setRejectionReason] = useState('');
+
+  const getAuthToken = () => {
+    return localStorage.getItem('token');
+  };
+
+  const handleAccept = async () => {
+    if (!referral || referral.status !== 'pending') {
+      setError('Only pending referrals can be accepted');
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+
+    try {
+      const token = getAuthToken();
+      if (!token) {
+        setError('Please log in to accept referrals');
+        setLoading(false);
+        return;
+      }
+
+      const response = await fetch(`${API_URL}/referrals/${referral.referral_id || referral.id}/accept`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success) {
+          if (onUpdate) onUpdate();
+          onClose();
+        } else {
+          setError(data.message || 'Failed to accept referral');
+        }
+      } else {
+        const errorData = await response.json();
+        setError(errorData.message || 'Failed to accept referral');
+      }
+    } catch (err) {
+      console.error('Error accepting referral:', err);
+      setError('Error accepting referral');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleReject = async () => {
+    if (!referral || referral.status !== 'pending') {
+      setError('Only pending referrals can be rejected');
+      return;
+    }
+
+    if (!rejectionReason.trim()) {
+      setError('Please provide a reason for rejection');
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+
+    try {
+      const token = getAuthToken();
+      if (!token) {
+        setError('Please log in to reject referrals');
+        setLoading(false);
+        return;
+      }
+
+      const response = await fetch(`${API_URL}/referrals/${referral.referral_id || referral.id}/reject`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          rejection_reason: rejectionReason,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success) {
+          if (onUpdate) onUpdate();
+          setShowRejectModal(false);
+          onClose();
+        } else {
+          setError(data.message || 'Failed to reject referral');
+        }
+      } else {
+        const errorData = await response.json();
+        setError(errorData.message || 'Failed to reject referral');
+      }
+    } catch (err) {
+      console.error('Error rejecting referral:', err);
+      setError('Error rejecting referral');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleComplete = async () => {
+    if (!referral || (referral.status !== 'accepted' && referral.status !== 'in_transit')) {
+      setError('Only accepted or in-transit referrals can be completed');
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+
+    try {
+      const token = getAuthToken();
+      if (!token) {
+        setError('Please log in to complete referrals');
+        setLoading(false);
+        return;
+      }
+
+      const response = await fetch(`${API_URL}/referrals/${referral.referral_id || referral.id}/complete`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success) {
+          if (onUpdate) onUpdate();
+          onClose();
+        } else {
+          setError(data.message || 'Failed to complete referral');
+        }
+      } else {
+        const errorData = await response.json();
+        setError(errorData.message || 'Failed to complete referral');
+      }
+    } catch (err) {
+      console.error('Error completing referral:', err);
+      setError('Error completing referral');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const canAccept = referral?.status === 'pending';
+  const canReject = referral?.status === 'pending';
+  const canComplete = referral?.status === 'accepted' || referral?.status === 'in_transit';
+
   return (
-    <div
-      style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        background: 'rgba(0,0,0,0.5)',
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        zIndex: 1000,
-      }}
-    >
+    <React.Fragment>
       <div
         style={{
-          background: 'white',
-          padding: '24px',
-          borderRadius: '8px',
-          width: '90%',
-          maxWidth: '600px',
-          boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0,0,0,0.5)',
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          zIndex: 1000,
         }}
       >
         <div
           style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            marginBottom: '20px',
+            background: 'white',
+            padding: '24px',
+            borderRadius: '8px',
+            width: '90%',
+            maxWidth: '600px',
+            boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
           }}
         >
-          <h2 style={{ margin: 0, fontSize: '20px', fontWeight: '600' }}>
-            Referral Details
-          </h2>
-          <button
-            onClick={onClose}
+          <div
             style={{
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              padding: '4px',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: '20px',
             }}
           >
-            <X size={20} color="#6c757d" />
-          </button>
-        </div>
+            <h2 style={{ margin: 0, fontSize: '20px', fontWeight: '600' }}>
+              Referral Details
+            </h2>
+            <button
+              onClick={onClose}
+              style={{
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                padding: '4px',
+              }}
+            >
+              <X size={20} color="#6c757d" />
+            </button>
+          </div>
 
-        <div>
-          <div style={{ marginBottom: '16px' }}>
-            <label
+          <div>
+            <div style={{ marginBottom: '16px' }}>
+              <label
               style={{
                 display: 'block',
                 marginBottom: '6px',
@@ -1070,13 +1275,82 @@ const ReferralDetailsModal = ({ referral, onClose }) => {
             </div>
           </div>
 
+          {error && (
+            <div style={{ marginBottom: '16px', padding: '12px', background: '#f8d7da', color: '#721c24', borderRadius: '4px', fontSize: '14px' }}>
+              {error}
+            </div>
+          )}
+
           <div
             style={{
               display: 'flex',
-              justifyContent: 'flex-end',
+              justifyContent: 'space-between',
               gap: '8px',
+              flexWrap: 'wrap',
             }}
           >
+            <div style={{ display: 'flex', gap: '8px', flex: 1 }}>
+              {canAccept && (
+                <button
+                  type="button"
+                  onClick={handleAccept}
+                  disabled={loading}
+                  style={{
+                    padding: '8px 16px',
+                    background: loading ? '#6c757d' : '#28a745',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: loading ? 'not-allowed' : 'pointer',
+                    fontSize: '14px',
+                    fontWeight: '500',
+                    flex: 1,
+                  }}
+                >
+                  {loading ? 'Processing...' : 'Accept'}
+                </button>
+              )}
+              {canReject && (
+                <button
+                  type="button"
+                  onClick={() => setShowRejectModal(true)}
+                  disabled={loading}
+                  style={{
+                    padding: '8px 16px',
+                    background: loading ? '#6c757d' : '#dc3545',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: loading ? 'not-allowed' : 'pointer',
+                    fontSize: '14px',
+                    fontWeight: '500',
+                    flex: 1,
+                  }}
+                >
+                  Reject
+                </button>
+              )}
+              {canComplete && (
+                <button
+                  type="button"
+                  onClick={handleComplete}
+                  disabled={loading}
+                  style={{
+                    padding: '8px 16px',
+                    background: loading ? '#6c757d' : '#17a2b8',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: loading ? 'not-allowed' : 'pointer',
+                    fontSize: '14px',
+                    fontWeight: '500',
+                    flex: 1,
+                  }}
+                >
+                  {loading ? 'Processing...' : 'Complete'}
+                </button>
+              )}
+            </div>
             <button
               type="button"
               onClick={onClose}
@@ -1095,7 +1369,109 @@ const ReferralDetailsModal = ({ referral, onClose }) => {
           </div>
         </div>
       </div>
-    </div>
+      </div>
+
+      {showRejectModal && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(0,0,0,0.5)',
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            zIndex: 1001,
+          }}
+        >
+          <div
+            style={{
+              background: 'white',
+              padding: '24px',
+              borderRadius: '8px',
+              width: '90%',
+              maxWidth: '500px',
+              boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
+            }}
+          >
+            <h3 style={{ margin: '0 0 16px 0', fontSize: '18px', fontWeight: '600' }}>
+              Reject Referral
+            </h3>
+            <div style={{ marginBottom: '16px' }}>
+              <label
+                style={{
+                  display: 'block',
+                  marginBottom: '6px',
+                  fontWeight: '500',
+                  fontSize: '14px',
+                }}
+              >
+                Reason for Rejection <span style={{ color: 'red' }}>*</span>
+              </label>
+              <textarea
+                rows="4"
+                value={rejectionReason}
+                onChange={(e) => setRejectionReason(e.target.value)}
+                placeholder="Please provide a reason for rejecting this referral..."
+                style={{
+                  width: '100%',
+                  padding: '8px 12px',
+                  border: '1px solid #ced4da',
+                  borderRadius: '4px',
+                  fontSize: '14px',
+                  resize: 'vertical',
+                }}
+              />
+            </div>
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'flex-end',
+                gap: '8px',
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  setShowRejectModal(false);
+                  setRejectionReason('');
+                  setError('');
+                }}
+                style={{
+                  padding: '8px 16px',
+                  background: '#6c757d',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleReject}
+                disabled={loading || !rejectionReason.trim()}
+                style={{
+                  padding: '8px 16px',
+                  background: loading || !rejectionReason.trim() ? '#6c757d' : '#dc3545',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: loading || !rejectionReason.trim() ? 'not-allowed' : 'pointer',
+                  fontSize: '14px',
+                }}
+              >
+                {loading ? 'Rejecting...' : 'Confirm Reject'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </React.Fragment>
   );
 };
 

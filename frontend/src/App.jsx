@@ -31,7 +31,7 @@ import Patients from './components/Patient.jsx';
 import BranchManagement from './components/BranchManagement.jsx';
 import Profile from './components/Profile.jsx';
 import Settings from './components/Settings.jsx';
-import MedicationAdherence from './components/MedicationAdherence.jsx';
+import MedicationReminders from './components/MedicationReminders.jsx';
 import Medications from './components/Medications.jsx';
 import RefillRequests from './components/RefillRequests.jsx';
 import MyAppointments from './components/MyAppointments.jsx';
@@ -43,6 +43,7 @@ import Education from './components/Education.jsx';
 import Forum from './components/Forum.jsx';
 import PatientSurvey from './components/PatientSurvey.jsx';
 import SurveyMetrics from './components/SurveyMetrics.jsx';
+import SurveyResponses from './components/SurveyResponses.jsx';
 import AvailabilitySlots from './components/AvailabilitySlots.jsx';
 import DoctorAssignments from './components/DoctorAssignments.jsx';
 import ProtectedRoute from './components/ProtectedRoute.jsx';
@@ -306,7 +307,15 @@ export default function App() {
             path="/medication-adherence"
             element={
               <MainLayout socket={socket}>
-                <MedicationAdherence socket={socket} />
+                <MedicationReminders socket={socket} />
+              </MainLayout>
+            }
+          />
+          <Route
+            path="/medication-reminders"
+            element={
+              <MainLayout socket={socket}>
+                <MedicationReminders socket={socket} />
               </MainLayout>
             }
           />
@@ -383,6 +392,14 @@ export default function App() {
             element={
               <MainLayout socket={socket}>
                 <SurveyMetrics socket={socket} />
+              </MainLayout>
+            }
+          />
+          <Route
+            path="/survey-responses"
+            element={
+              <MainLayout socket={socket}>
+                <SurveyResponses socket={socket} />
               </MainLayout>
             }
           />

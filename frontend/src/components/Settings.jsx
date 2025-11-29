@@ -7,6 +7,9 @@ import {
   Info,
   HelpCircle,
   UserCheck,
+  KeyRound,
+  Building2,
+  MapPin,
 } from 'lucide-react';
 import UserManagement from './UserManagement';
 import RolePermissionManagement from './RolePermissionManagement';
@@ -14,6 +17,9 @@ import ClientTypes from './ClientTypes';
 import ChangePassword from './ChangePassword';
 import About from './About1';
 import FAQs from './FAQs';
+import MFAManagement from './MFAManagement';
+import UserFacilityAssignments from './UserFacilityAssignments';
+import RegionsManagement from './RegionsManagement';
 
 const API_BASE_URL = 'http://localhost:5000/api';
 
@@ -202,6 +208,52 @@ const Settings = () => {
               Client Types
             </button> */}
             <button
+              onClick={() => setActiveTab('facility-assignments')}
+              style={{
+                padding: '16px 24px',
+                border: 'none',
+                background: 'transparent',
+                borderBottom:
+                  activeTab === 'facility-assignments'
+                    ? '3px solid #D84040'
+                    : '3px solid transparent',
+                color: activeTab === 'facility-assignments' ? '#D84040' : '#6c757d',
+                fontWeight: activeTab === 'facility-assignments' ? 600 : 400,
+                cursor: 'pointer',
+                fontSize: '16px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                transition: 'all 0.2s',
+              }}
+            >
+              <Building2 size={18} />
+              Facility Assignments
+            </button>
+            <button
+              onClick={() => setActiveTab('regions')}
+              style={{
+                padding: '16px 24px',
+                border: 'none',
+                background: 'transparent',
+                borderBottom:
+                  activeTab === 'regions'
+                    ? '3px solid #D84040'
+                    : '3px solid transparent',
+                color: activeTab === 'regions' ? '#D84040' : '#6c757d',
+                fontWeight: activeTab === 'regions' ? 600 : 400,
+                cursor: 'pointer',
+                fontSize: '16px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                transition: 'all 0.2s',
+              }}
+            >
+              <MapPin size={18} />
+              Regions
+            </button>
+            <button
               onClick={() => setActiveTab('faqs')}
               style={{
                 padding: '16px 24px',
@@ -226,6 +278,29 @@ const Settings = () => {
             </button>
           </>
         )}
+        <button
+          onClick={() => setActiveTab('security')}
+          style={{
+            padding: '16px 24px',
+            border: 'none',
+            background: 'transparent',
+            borderBottom:
+              activeTab === 'security'
+                ? '3px solid #D84040'
+                : '3px solid transparent',
+            color: activeTab === 'security' ? '#D84040' : '#6c757d',
+            fontWeight: activeTab === 'security' ? 600 : 400,
+            cursor: 'pointer',
+            fontSize: '16px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            transition: 'all 0.2s',
+          }}
+        >
+          <KeyRound size={18} />
+          Security
+        </button>
         <button
           onClick={() => setActiveTab('password')}
           style={{
@@ -290,8 +365,14 @@ const Settings = () => {
           <RolePermissionManagement />
         ) : activeTab === 'client-types' && !isPatient ? (
           <ClientTypes />
+        ) : activeTab === 'facility-assignments' && !isPatient ? (
+          <UserFacilityAssignments />
+        ) : activeTab === 'regions' && !isPatient ? (
+          <RegionsManagement />
         ) : activeTab === 'faqs' && !isPatient ? (
           <FAQs isAdmin={isAdmin} />
+        ) : activeTab === 'security' ? (
+          <MFAManagement />
         ) : activeTab === 'password' ? (
           <ChangePassword />
         ) : activeTab === 'about' ? (

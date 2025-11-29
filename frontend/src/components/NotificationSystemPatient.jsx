@@ -424,34 +424,77 @@ const NotificationSystemPatient = ({ socket }) => {
         const isApproved = notification.type === 'appointment_approved' || 
                           notification.type === 'appointment_request_approved' ||
                           notification.title?.toLowerCase().includes('approved') ||
-                          notification.message?.toLowerCase().includes('approved');
+                          notification.message?.toLowerCase().includes('approved') ||
+                          notification.message?.toLowerCase().includes('has been approved') ||
+                          notification.message?.toLowerCase().includes('has been approved and booked');
         
         const isDeclined = notification.type === 'appointment_declined' || 
                           notification.type === 'appointment_request_declined' ||
                           notification.title?.toLowerCase().includes('declined') ||
                           notification.message?.toLowerCase().includes('declined');
 
-        if (isApproved && details) {
-            const appointmentDate = new Date(details.scheduled_start || notification.appointment?.scheduled_start);
-            const appointmentTime = new Date(details.scheduled_start || notification.appointment?.scheduled_start);
-            const patientName = details.patient_name || 'Patient';
-            const facilityName = details.facility_name || 'Facility';
-            const providerName = details.provider_name || 'Provider';
-            const appointmentType = details.appointment_type || notification.appointment?.appointment_type || 'Appointment';
+        if (isApproved) {
+            // Use details if available, otherwise fall back to notification.appointment or parse from message
+            let scheduledStart = details?.scheduled_start || notification.appointment?.scheduled_start;
+            
+            // Try to parse date/time from message if not in details
+            if (!scheduledStart && notification.message) {
+                // Look for patterns like "11/30/2025 at 09:00:00" or "2025-11-30 09:00:00"
+                const dateTimeMatch = notification.message.match(/(\d{1,2}\/\d{1,2}\/\d{4}|\d{4}-\d{2}-\d{2}).*?(\d{1,2}:\d{2}(?::\d{2})?)/);
+                if (dateTimeMatch) {
+                    try {
+                        const dateStr = dateTimeMatch[1];
+                        const timeStr = dateTimeMatch[2];
+                        // Convert MM/DD/YYYY to YYYY-MM-DD if needed
+                        let isoDate = dateStr;
+                        if (dateStr.includes('/')) {
+                            const [month, day, year] = dateStr.split('/');
+                            isoDate = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+                        }
+                        scheduledStart = `${isoDate} ${timeStr.padEnd(8, ':00')}`;
+                    } catch (e) {
+                        console.warn('Error parsing date from message:', e);
+                    }
+                }
+            }
+            
+            const appointmentDate = scheduledStart ? new Date(scheduledStart) : null;
+            const appointmentTime = scheduledStart ? new Date(scheduledStart) : null;
+            const patientName = details?.patient_name || 'Patient';
+            const facilityName = details?.facility_name || 'Facility';
+            const providerName = details?.provider_name || 'Provider';
+            const appointmentType = details?.appointment_type || notification.appointment?.appointment_type || 'Appointment';
+            
+            // Build details array - only include items we have data for
+            const detailsArray = [];
+            
+            if (appointmentDate && !isNaN(appointmentDate.getTime())) {
+                detailsArray.push({ 
+                    icon: '📅', 
+                    label: 'Date', 
+                    value: appointmentDate.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) 
+                });
+            }
+            
+            if (appointmentTime && !isNaN(appointmentTime.getTime())) {
+                detailsArray.push({ 
+                    icon: '⏰', 
+                    label: 'Time', 
+                    value: appointmentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) 
+                });
+            }
+            
+            detailsArray.push({ icon: '🏥', label: 'Branch', value: facilityName });
+            detailsArray.push({ icon: '👨‍⚕️', label: 'Provider', value: providerName });
+            detailsArray.push({ icon: '📝', label: 'Type', value: appointmentType.replace(/_/g, ' ').toUpperCase() });
             
             return {
                 formatted: true,
                 subject: '✅ Appointment Confirmed - MyHubCares',
                 greeting: `Dear ${patientName},`,
                 mainMessage: 'Your appointment request has been APPROVED!',
-                details: [
-                    { icon: '📅', label: 'Date', value: appointmentDate.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) },
-                    { icon: '⏰', label: 'Time', value: appointmentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) },
-                    { icon: '🏥', label: 'Branch', value: facilityName },
-                    { icon: '👨‍⚕️', label: 'Provider', value: providerName },
-                    { icon: '📝', label: 'Type', value: appointmentType.replace(/_/g, ' ').toUpperCase() }
-                ],
-                notes: details.case_manager_notes || details.notes || null,
+                details: detailsArray,
+                notes: details?.case_manager_notes || details?.notes || null,
                 footer: 'Please arrive 15 minutes before your scheduled time.',
                 closing: 'Thank you for choosing MyHubCares!'
             };
@@ -461,6 +504,9 @@ const NotificationSystemPatient = ({ socket }) => {
             const appointmentDate = details?.scheduled_start || notification.appointment?.scheduled_start || notification.timestamp;
             const appointmentTime = details?.scheduled_start || notification.appointment?.scheduled_start || notification.timestamp;
             const patientName = details?.patient_name || 'Patient';
+            const facilityName = details?.facility_name || 'Facility';
+            const providerName = details?.provider_name || 'Provider';
+            const appointmentType = details?.appointment_type || notification.appointment?.appointment_type || 'Appointment';
             const declineReason = notification.decline_reason || 
                                  (notification.message?.includes('Reason:') ? notification.message.split('Reason:')[1]?.trim() : null) ||
                                  'No reason provided';
@@ -471,8 +517,11 @@ const NotificationSystemPatient = ({ socket }) => {
                 greeting: `Dear ${patientName},`,
                 mainMessage: 'We regret to inform you that your appointment request could not be approved.',
                 details: [
-                    { icon: '📅', label: 'Requested Date', value: new Date(appointmentDate).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) },
-                    { icon: '⏰', label: 'Requested Time', value: new Date(appointmentTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) }
+                    { icon: '📅', label: 'Date', value: new Date(appointmentDate).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) },
+                    { icon: '⏰', label: 'Time', value: new Date(appointmentTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) },
+                    { icon: '🏥', label: 'Branch', value: facilityName },
+                    { icon: '👨‍⚕️', label: 'Provider', value: providerName },
+                    { icon: '📝', label: 'Type', value: appointmentType.replace(/_/g, ' ').toUpperCase() }
                 ],
                 declineReason: declineReason,
                 footer: 'Please submit a new request with a different date/time or contact us for assistance.',
@@ -698,32 +747,15 @@ const NotificationSystemPatient = ({ socket }) => {
                                                             )}
                                                             
                                                             {formatted.notes && (
-                                                                <div style={{
-                                                                    marginTop: '12px',
-                                                                    padding: '12px',
-                                                                    background: '#eff6ff',
-                                                                    borderRadius: '8px',
-                                                                    fontSize: '13px',
-                                                                    color: '#1e40af',
-                                                                    fontStyle: 'italic',
-                                                                    whiteSpace: 'pre-wrap'
-                                                                }}>
-                                                                    {formatted.notes}
-                                                                </div>
+                                                                <p style={{ margin: '12px 0 8px 0', fontSize: '13px', color: '#374151', lineHeight: '1.6' }}>
+                                                                    <strong>Notes:</strong> {formatted.notes}
+                                                                </p>
                                                             )}
                                                             
                                                             {formatted.declineReason && (
-                                                                <div style={{
-                                                                    marginTop: '12px',
-                                                                    padding: '12px',
-                                                                    background: '#fef2f2',
-                                                                    borderRadius: '8px',
-                                                                    border: '1px solid #fecaca',
-                                                                    fontSize: '13px',
-                                                                    color: '#991b1b'
-                                                                }}>
+                                                                <p style={{ margin: '12px 0 8px 0', fontSize: '13px', color: '#374151', lineHeight: '1.6' }}>
                                                                     <strong>Reason:</strong> {formatted.declineReason}
-                                                                </div>
+                                                                </p>
                                                             )}
                                                             
                                                             {formatted.footer && (
@@ -1063,34 +1095,77 @@ const NotificationDetailsModal = ({ notification, onClose }) => {
         const isApproved = notification.type === 'appointment_approved' || 
                           notification.type === 'appointment_request_approved' ||
                           notification.title?.toLowerCase().includes('approved') ||
-                          notification.message?.toLowerCase().includes('approved');
+                          notification.message?.toLowerCase().includes('approved') ||
+                          notification.message?.toLowerCase().includes('has been approved') ||
+                          notification.message?.toLowerCase().includes('has been approved and booked');
         
         const isDeclined = notification.type === 'appointment_declined' || 
                           notification.type === 'appointment_request_declined' ||
                           notification.title?.toLowerCase().includes('declined') ||
                           notification.message?.toLowerCase().includes('declined');
 
-        if (isApproved && details) {
-            const appointmentDate = new Date(details.scheduled_start || notification.appointment?.scheduled_start);
-            const appointmentTime = new Date(details.scheduled_start || notification.appointment?.scheduled_start);
-            const patientName = details.patient_name || 'Patient';
-            const facilityName = details.facility_name || 'Facility';
-            const providerName = details.provider_name || 'Provider';
-            const appointmentType = details.appointment_type || notification.appointment?.appointment_type || 'Appointment';
+        if (isApproved) {
+            // Use details if available, otherwise fall back to notification.appointment or parse from message
+            let scheduledStart = details?.scheduled_start || notification.appointment?.scheduled_start;
+            
+            // Try to parse date/time from message if not in details
+            if (!scheduledStart && notification.message) {
+                // Look for patterns like "11/30/2025 at 09:00:00" or "2025-11-30 09:00:00"
+                const dateTimeMatch = notification.message.match(/(\d{1,2}\/\d{1,2}\/\d{4}|\d{4}-\d{2}-\d{2}).*?(\d{1,2}:\d{2}(?::\d{2})?)/);
+                if (dateTimeMatch) {
+                    try {
+                        const dateStr = dateTimeMatch[1];
+                        const timeStr = dateTimeMatch[2];
+                        // Convert MM/DD/YYYY to YYYY-MM-DD if needed
+                        let isoDate = dateStr;
+                        if (dateStr.includes('/')) {
+                            const [month, day, year] = dateStr.split('/');
+                            isoDate = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+                        }
+                        scheduledStart = `${isoDate} ${timeStr.padEnd(8, ':00')}`;
+                    } catch (e) {
+                        console.warn('Error parsing date from message:', e);
+                    }
+                }
+            }
+            
+            const appointmentDate = scheduledStart ? new Date(scheduledStart) : null;
+            const appointmentTime = scheduledStart ? new Date(scheduledStart) : null;
+            const patientName = details?.patient_name || 'Patient';
+            const facilityName = details?.facility_name || 'Facility';
+            const providerName = details?.provider_name || 'Provider';
+            const appointmentType = details?.appointment_type || notification.appointment?.appointment_type || 'Appointment';
+            
+            // Build details array - only include items we have data for
+            const detailsArray = [];
+            
+            if (appointmentDate && !isNaN(appointmentDate.getTime())) {
+                detailsArray.push({ 
+                    icon: '📅', 
+                    label: 'Date', 
+                    value: appointmentDate.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) 
+                });
+            }
+            
+            if (appointmentTime && !isNaN(appointmentTime.getTime())) {
+                detailsArray.push({ 
+                    icon: '⏰', 
+                    label: 'Time', 
+                    value: appointmentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) 
+                });
+            }
+            
+            detailsArray.push({ icon: '🏥', label: 'Branch', value: facilityName });
+            detailsArray.push({ icon: '👨‍⚕️', label: 'Provider', value: providerName });
+            detailsArray.push({ icon: '📝', label: 'Type', value: appointmentType.replace(/_/g, ' ').toUpperCase() });
             
             return {
                 formatted: true,
                 subject: '✅ Appointment Confirmed - MyHubCares',
                 greeting: `Dear ${patientName},`,
                 mainMessage: 'Your appointment request has been APPROVED!',
-                details: [
-                    { icon: '📅', label: 'Date', value: appointmentDate.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) },
-                    { icon: '⏰', label: 'Time', value: appointmentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) },
-                    { icon: '🏥', label: 'Branch', value: facilityName },
-                    { icon: '👨‍⚕️', label: 'Provider', value: providerName },
-                    { icon: '📝', label: 'Type', value: appointmentType.replace(/_/g, ' ').toUpperCase() }
-                ],
-                notes: details.case_manager_notes || details.notes || null,
+                details: detailsArray,
+                notes: details?.case_manager_notes || details?.notes || null,
                 footer: 'Please arrive 15 minutes before your scheduled time.',
                 closing: 'Thank you for choosing MyHubCares!'
             };
@@ -1100,6 +1175,9 @@ const NotificationDetailsModal = ({ notification, onClose }) => {
             const appointmentDate = details?.scheduled_start || notification.appointment?.scheduled_start || notification.timestamp;
             const appointmentTime = details?.scheduled_start || notification.appointment?.scheduled_start || notification.timestamp;
             const patientName = details?.patient_name || 'Patient';
+            const facilityName = details?.facility_name || 'Facility';
+            const providerName = details?.provider_name || 'Provider';
+            const appointmentType = details?.appointment_type || notification.appointment?.appointment_type || 'Appointment';
             const declineReason = notification.decline_reason || 
                                  (notification.message?.includes('Reason:') ? notification.message.split('Reason:')[1]?.trim() : null) ||
                                  'No reason provided';
@@ -1110,8 +1188,11 @@ const NotificationDetailsModal = ({ notification, onClose }) => {
                 greeting: `Dear ${patientName},`,
                 mainMessage: 'We regret to inform you that your appointment request could not be approved.',
                 details: [
-                    { icon: '📅', label: 'Requested Date', value: new Date(appointmentDate).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) },
-                    { icon: '⏰', label: 'Requested Time', value: new Date(appointmentTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) }
+                    { icon: '📅', label: 'Date', value: new Date(appointmentDate).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) },
+                    { icon: '⏰', label: 'Time', value: new Date(appointmentTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) },
+                    { icon: '🏥', label: 'Branch', value: facilityName },
+                    { icon: '👨‍⚕️', label: 'Provider', value: providerName },
+                    { icon: '📝', label: 'Type', value: appointmentType.replace(/_/g, ' ').toUpperCase() }
                 ],
                 declineReason: declineReason,
                 footer: 'Please submit a new request with a different date/time or contact us for assistance.',
@@ -1195,32 +1276,15 @@ const NotificationDetailsModal = ({ notification, onClose }) => {
                             )}
                             
                             {formatted.notes && (
-                                <div style={{
-                                    marginTop: '16px',
-                                    padding: '16px',
-                                    background: '#eff6ff',
-                                    borderRadius: '8px',
-                                    fontSize: '14px',
-                                    color: '#1e40af',
-                                    fontStyle: 'italic',
-                                    whiteSpace: 'pre-wrap'
-                                }}>
-                                    {formatted.notes}
-                                </div>
+                                <p style={{ margin: '16px 0 12px 0', fontSize: '14px', color: '#374151', lineHeight: '1.6' }}>
+                                    <strong>Notes:</strong> {formatted.notes}
+                                </p>
                             )}
                             
                             {formatted.declineReason && (
-                                <div style={{
-                                    marginTop: '16px',
-                                    padding: '16px',
-                                    background: '#fef2f2',
-                                    borderRadius: '8px',
-                                    border: '1px solid #fecaca',
-                                    fontSize: '14px',
-                                    color: '#991b1b'
-                                }}>
+                                <p style={{ margin: '16px 0 12px 0', fontSize: '14px', color: '#374151', lineHeight: '1.6' }}>
                                     <strong>Reason:</strong> {formatted.declineReason}
-                                </div>
+                                </p>
                             )}
                             
                             {formatted.footer && (

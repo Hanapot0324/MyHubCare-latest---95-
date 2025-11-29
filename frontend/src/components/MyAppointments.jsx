@@ -849,9 +849,13 @@ const MyAppointments = ({ socket }) => {
             if (response.ok) {
                 const data = await response.json();
                 if (data.success) {
-                    // Show all slots (both available and unavailable) so users can see expired slots
+                    // Show all slots (available, unavailable, and booked) so users can see all slots
+                    // Booked slots should be shown but marked as unavailable for booking
                     const allSlots = (data.data || []).filter(slot => 
-                        slot.slot_status === 'available' || slot.slot_status === 'unavailable'
+                        slot.slot_status === 'available' || 
+                        slot.slot_status === 'unavailable' || 
+                        slot.slot_status === 'booked' ||
+                        (slot.appointment_id && slot.appointment_id !== 'available' && slot.appointment_id !== null)
                     );
                     setSelectedDateSlots(allSlots);
                 }
@@ -1613,7 +1617,17 @@ const MyAppointments = ({ socket }) => {
                 const intervals = generateTimeIntervals(slotStart, slotEnd);
                 
                 intervals.forEach(interval => {
-                    const isBooked = isTimeSlotBooked(interval.start, interval.end);
+                    // Check if slot is booked: either has appointment_id, status is 'booked', or overlaps with existing appointment
+                    const appointmentId = slot.appointment_id;
+                    const hasAppointmentId = appointmentId && 
+                        appointmentId !== 'available' && 
+                        appointmentId !== null && 
+                        appointmentId !== '' &&
+                        String(appointmentId).trim().length > 0;
+                    const isBookedByStatus = slot.slot_status === 'booked';
+                    const isBookedBySlot = hasAppointmentId || isBookedByStatus;
+                    const isBookedByAppointment = isTimeSlotBooked(interval.start, interval.end);
+                    const isBooked = isBookedBySlot || isBookedByAppointment;
                     availability.push({
                         start: interval.start,
                         end: interval.end,
@@ -1716,19 +1730,36 @@ const MyAppointments = ({ socket }) => {
                                 facility_id: group.facility_id,
                                 provider_name: group.provider_name,
                                 facility_name: group.facility_name,
-                                slot_status: slot.slot_status // Include slot status
+                                slot_status: slot.slot_status, // Include slot status
+                                appointment_id: slot.appointment_id // Include appointment_id to check if slot is booked
                             });
                         });
                     });
 
                     // Remove duplicate intervals (same time, same provider/facility)
+                    // If multiple slots have the same interval, mark as booked if ANY has appointment_id
                     const uniqueIntervals = [];
-                    const seen = new Set();
+                    const seen = new Map();
                     allIntervals.forEach(interval => {
                         const key = `${interval.start}_${interval.end}_${interval.provider_id}_${interval.facility_id}`;
                         if (!seen.has(key)) {
-                            seen.add(key);
+                            seen.set(key, interval);
                             uniqueIntervals.push(interval);
+                        } else {
+                            // If duplicate found, check if this one has appointment_id and update the existing one
+                            const existingIndex = uniqueIntervals.findIndex(i => 
+                                i.start === interval.start && 
+                                i.end === interval.end && 
+                                i.provider_id === interval.provider_id && 
+                                i.facility_id === interval.facility_id
+                            );
+                            if (existingIndex !== -1) {
+                                const existing = uniqueIntervals[existingIndex];
+                                // If this interval has appointment_id, mark the existing one as booked too
+                                if (interval.appointment_id && interval.appointment_id !== 'available' && interval.appointment_id !== null) {
+                                    existing.appointment_id = interval.appointment_id;
+                                }
+                            }
                         }
                     });
 
@@ -1746,9 +1777,19 @@ const MyAppointments = ({ socket }) => {
                                 gap: '8px' 
                             }}>
                                 {uniqueIntervals.map((interval, index) => {
-                                    const isBooked = isTimeSlotBooked(interval.start, interval.end);
-                                    const isUnavailable = interval.slot_status === 'unavailable';
-                                    const isAvailable = interval.slot_status === 'available' && !isBooked;
+                                    // Check if slot is booked: either has appointment_id, status is 'booked', or overlaps with existing appointment
+                                    const appointmentId = interval.appointment_id;
+                                    const hasAppointmentId = appointmentId && 
+                                        appointmentId !== 'available' && 
+                                        appointmentId !== null && 
+                                        appointmentId !== '' &&
+                                        String(appointmentId).trim().length > 0;
+                                    const isBookedByStatus = interval.slot_status === 'booked';
+                                    const isBookedBySlot = hasAppointmentId || isBookedByStatus;
+                                    const isBookedByAppointment = isTimeSlotBooked(interval.start, interval.end);
+                                    const isBooked = isBookedBySlot || isBookedByAppointment;
+                                    const isUnavailable = interval.slot_status === 'unavailable' && !isBooked;
+                                    const isAvailable = (interval.slot_status === 'available' || interval.slot_status === 'unavailable') && !isBooked;
                                     
                                     // Determine colors and styles based on status
                                     let borderColor = '#28a745';
@@ -3640,10 +3681,15 @@ const MyAppointmentModal = ({ mode, appointment, facilities, providers: initialP
             if (response.ok) {
                 const data = await response.json();
                 if (data.success) {
-                    // Show both available and unavailable slots so users can see expired slots
+                    // Show available, unavailable, and booked slots so users can see all slots
+                    // Booked slots should be shown but marked as unavailable for booking
                     const allSlots = (data.data || []).filter(slot => 
-                        slot.slot_status === 'available' || slot.slot_status === 'unavailable'
+                        slot.slot_status === 'available' || 
+                        slot.slot_status === 'unavailable' || 
+                        slot.slot_status === 'booked' ||
+                        (slot.appointment_id && slot.appointment_id !== 'available' && slot.appointment_id !== null)
                     );
+                    console.log('Fetched slots for date:', dateStr, allSlots);
                     setAvailableTimeSlots(allSlots);
                     
                     // Fetch existing appointments in parallel for faster loading
@@ -4425,6 +4471,16 @@ const MyAppointmentModal = ({ mode, appointment, facilities, providers: initialP
                                             // Generate all time intervals from all slots in this group
                                             const allIntervals = [];
                                             group.slots.forEach(slot => {
+                                                // Debug: log slot data for first slot in first group
+                                                if (groupIndex === 0 && group.slots.indexOf(slot) === 0) {
+                                                    console.log('Processing slot for intervals:', {
+                                                        slot_id: slot.slot_id,
+                                                        start_time: slot.start_time,
+                                                        end_time: slot.end_time,
+                                                        appointment_id: slot.appointment_id,
+                                                        slot_status: slot.slot_status
+                                                    });
+                                                }
                                                 const intervals = generateTimeIntervals(slot.start_time, slot.end_time);
                                                 intervals.forEach(interval => {
                                                     allIntervals.push({
@@ -4433,19 +4489,45 @@ const MyAppointmentModal = ({ mode, appointment, facilities, providers: initialP
                                                         facility_id: group.slots[0].facility_id,
                                                         provider_name: group.provider_name,
                                                         facility_name: group.facility_name,
-                                                        slot_status: slot.slot_status // Include slot status
+                                                        slot_status: slot.slot_status, // Include slot status
+                                                        appointment_id: slot.appointment_id // Include appointment_id to check if slot is booked
                                                     });
                                                 });
                                             });
 
                                             // Remove duplicate intervals
+                                            // If multiple slots have the same interval, mark as booked if ANY has appointment_id
                                             const uniqueIntervals = [];
-                                            const seen = new Set();
+                                            const seen = new Map();
                                             allIntervals.forEach(interval => {
                                                 const key = `${interval.start}_${interval.end}_${interval.provider_id}_${interval.facility_id}`;
                                                 if (!seen.has(key)) {
-                                                    seen.add(key);
+                                                    seen.set(key, interval);
                                                     uniqueIntervals.push(interval);
+                                                } else {
+                                                    // If duplicate found, check if this one has appointment_id and update the existing one
+                                                    const existingIndex = uniqueIntervals.findIndex(i => 
+                                                        i.start === interval.start && 
+                                                        i.end === interval.end && 
+                                                        i.provider_id === interval.provider_id && 
+                                                        i.facility_id === interval.facility_id
+                                                    );
+                                                    if (existingIndex !== -1) {
+                                                        const existing = uniqueIntervals[existingIndex];
+                                                        // If this interval has appointment_id or is booked, mark the existing one as booked too
+                                                        const appointmentId = interval.appointment_id;
+                                                        const hasAppointmentId = appointmentId && 
+                                                            appointmentId !== 'available' && 
+                                                            appointmentId !== null && 
+                                                            appointmentId !== '' &&
+                                                            String(appointmentId).trim().length > 0;
+                                                        if (hasAppointmentId || interval.slot_status === 'booked') {
+                                                            existing.appointment_id = interval.appointment_id || existing.appointment_id;
+                                                            if (interval.slot_status === 'booked') {
+                                                                existing.slot_status = 'booked';
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                             });
 
@@ -4463,9 +4545,36 @@ const MyAppointmentModal = ({ mode, appointment, facilities, providers: initialP
                                                         gap: '8px' 
                                                     }}>
                                                         {uniqueIntervals.map((interval, idx) => {
-                                                            const isBooked = isTimeSlotBooked(interval.start, interval.end);
-                                                            const isUnavailable = interval.slot_status === 'unavailable';
-                                                            const isAvailable = interval.slot_status === 'available' && !isBooked;
+                                                            // Check if slot is booked: either has appointment_id, status is 'booked', or overlaps with existing appointment
+                                                            // appointment_id should be a valid UUID (string), not 'available', null, or empty
+                                                            const appointmentId = interval.appointment_id;
+                                                            const hasAppointmentId = appointmentId && 
+                                                                appointmentId !== 'available' && 
+                                                                appointmentId !== null && 
+                                                                appointmentId !== '' &&
+                                                                String(appointmentId).trim().length > 0;
+                                                            const isBookedByStatus = interval.slot_status === 'booked';
+                                                            const isBookedBySlot = hasAppointmentId || isBookedByStatus;
+                                                            const isBookedByAppointment = isTimeSlotBooked(interval.start, interval.end);
+                                                            const isBooked = isBookedBySlot || isBookedByAppointment;
+                                                            
+                                                            // Debug logging for first interval
+                                                            if (idx === 0) {
+                                                                console.log('Interval booking check:', {
+                                                                    start: interval.start,
+                                                                    end: interval.end,
+                                                                    appointment_id: interval.appointment_id,
+                                                                    slot_status: interval.slot_status,
+                                                                    hasAppointmentId,
+                                                                    isBookedByStatus,
+                                                                    isBookedBySlot,
+                                                                    isBookedByAppointment,
+                                                                    isBooked
+                                                                });
+                                                            }
+                                                            
+                                                            const isUnavailable = interval.slot_status === 'unavailable' && !isBooked;
+                                                            const isAvailable = (interval.slot_status === 'available' || interval.slot_status === 'unavailable') && !isBooked;
                                                             const isSelected = formData.appointmentTime === interval.start.slice(0, 5) && 
                                                                                formData.appointmentEndTime === interval.end.slice(0, 5);
                                                             

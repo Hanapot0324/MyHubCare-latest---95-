@@ -18,7 +18,7 @@ import inventoryTransactionsRoutes from './routes/inventory-transactions.js';
 import inventoryAlertsRoutes from './routes/inventory-alerts.js';
 import inventorySuppliersRoutes from './routes/inventory-suppliers.js';
 import inventoryOrdersRoutes from './routes/inventory-orders.js';
-import prescriptionsRoutes from './routes/prescriptions.js';
+import prescriptionsRoutes, { setSocketIO as setPrescriptionsSocketIO } from './routes/prescriptions.js';
 import medicationsRoutes from './routes/medications.js';
 import clinicalRoutes from './routes/clinical-visits.js';
 import adherenceRoutes from './routes/medication-adherence.js';
@@ -76,6 +76,8 @@ setSocketIO(io);
 setAppointmentRequestsSocketIO(io);
 // Set Socket.IO instance for doctor assignments route
 setDoctorAssignmentsSocketIO(io);
+// Set Socket.IO instance for prescriptions route
+setPrescriptionsSocketIO(io);
 // Set Socket.IO instance for reminder service
 setReminderServiceSocketIO(io);
 

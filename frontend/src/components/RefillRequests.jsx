@@ -277,98 +277,92 @@ const RefillRequests = ({ socket }) => {
   }
 
   return (
-    <div style={{ padding: '20px', backgroundColor: 'white', minHeight: '100vh', paddingTop: '100px' }}>
+    <div style={{ padding: '20px', paddingTop: '100px', backgroundColor: 'white', minHeight: '100vh' }}>
       {/* Header */}
       <div
         style={{
-          marginBottom: '30px',
-          background: 'linear-gradient(to right, #2563eb, #1e40af)',
+          background: 'linear-gradient(to right, #D84040, #A31D1D)',
           padding: '30px',
           borderRadius: '12px',
-          boxShadow: '0 4px 15px rgba(37, 99, 235, 0.2)',
-          color: 'white',
+          marginBottom: '30px',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
         }}
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
-            <h2 style={{ margin: '0 0 5px 0', fontSize: '24px', fontWeight: 'bold' }}>
-              💊 Medication Refill Requests
-            </h2>
-            <p style={{ margin: 0, fontSize: '16px' }}>
-              Review and manage patient medication refill requests
-            </p>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <span 
-              className="badge" 
-              style={{
-                backgroundColor: '#ffc107',
-                color: '#212529',
-                padding: '8px 16px',
-                borderRadius: '8px',
-                fontSize: '16px',
-                fontWeight: '600',
-              }}
-            >
-              {pendingCount} Pending
-            </span>
-          </div>
+        <div>
+          <h2 style={{ margin: 0, color: 'white', fontSize: '24px', fontWeight: 'bold' }}>
+            💊 Medication Refill Requests
+          </h2>
+          <p style={{ margin: '5px 0 0 0', color: '#F8F2DE', fontSize: '14px' }}>
+            Review and manage patient medication refill requests
+          </p>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <span 
+            style={{
+              backgroundColor: '#ffc107',
+              color: '#212529',
+              padding: '8px 16px',
+              borderRadius: '8px',
+              fontSize: '16px',
+              fontWeight: '600',
+            }}
+          >
+            {pendingCount} Pending
+          </span>
         </div>
       </div>
 
       {/* Search and Filter */}
-      <div
-        style={{
-          display: 'flex',
-          gap: '15px',
-          marginBottom: '20px',
-          flexWrap: 'wrap',
-        }}
-      >
-        <div style={{ flex: 1, minWidth: '300px', position: 'relative' }}>
-          <Search
-            size={20}
+      <div style={{ marginBottom: '20px', position: 'relative' }}>
+        <div style={{ display: 'flex', gap: '15px', flexWrap: 'wrap' }}>
+          <div style={{ flex: 1, minWidth: '300px', position: 'relative' }}>
+            <Search
+              size={20}
+              style={{
+                position: 'absolute',
+                left: '12px',
+                top: '50%',
+                transform: 'translateY(-50%)',
+                color: '#6c757d',
+              }}
+            />
+            <input
+              type="text"
+              placeholder="Search by patient name, medication, or facility..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '12px 12px 12px 40px',
+                border: '1px solid #ced4da',
+                borderRadius: '8px',
+                fontSize: '14px',
+              }}
+            />
+          </div>
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
             style={{
-              position: 'absolute',
-              left: '12px',
-              top: '50%',
-              transform: 'translateY(-50%)',
-              color: '#6c757d',
-            }}
-          />
-          <input
-            type="text"
-            placeholder="Search by patient name..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            style={{
-              width: '100%',
-              padding: '12px 12px 12px 40px',
+              padding: '12px 16px',
               border: '1px solid #ced4da',
               borderRadius: '8px',
               fontSize: '14px',
+              cursor: 'pointer',
+              minWidth: '200px',
             }}
-          />
+          >
+            <option value="all">All Status</option>
+            <option value="pending">Pending</option>
+            <option value="approved">Approved</option>
+            <option value="ready">Ready for Pickup</option>
+            <option value="dispensed">Dispensed</option>
+            <option value="declined">Declined</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
         </div>
-        <select
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
-          style={{
-            padding: '12px 16px',
-            border: '1px solid #ced4da',
-            borderRadius: '8px',
-            fontSize: '14px',
-            cursor: 'pointer',
-          }}
-        >
-          <option value="all">All Status</option>
-          <option value="pending">Pending</option>
-          <option value="approved">Approved</option>
-          <option value="ready">Ready for Pickup</option>
-          <option value="dispensed">Dispensed</option>
-          <option value="declined">Declined</option>
-          <option value="cancelled">Cancelled</option>
-        </select>
       </div>
 
       {/* Refill Requests List */}
@@ -382,25 +376,116 @@ const RefillRequests = ({ socket }) => {
       >
         {filteredRequests.length === 0 ? (
           <div style={{ padding: '40px', textAlign: 'center', color: '#6c757d' }}>
-            No refill requests found
+            <Package size={48} style={{ marginBottom: '15px', opacity: 0.5 }} />
+            <p>No refill requests found</p>
           </div>
         ) : (
           filteredRequests.map((request) => (
             <div
               key={request.refill_id}
-              className="patient-card request-card"
               style={{
                 padding: '20px',
                 borderBottom: '1px solid #e9ecef',
                 display: 'flex',
                 flexDirection: 'column',
                 gap: '15px',
+                background: 'white',
               }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div style={{ flex: 1 }}>
+                  {/* Workflow Visualization */}
+                  <div style={{ 
+                    marginBottom: '15px', 
+                    padding: '12px', 
+                    background: '#F8F2DE', 
+                    borderRadius: '8px',
+                    border: '1px solid #ECDCBF'
+                  }}>
+                    <div style={{ 
+                      display: 'flex', 
+                      alignItems: 'center', 
+                      justifyContent: 'space-between',
+                      flexWrap: 'wrap',
+                      gap: '10px'
+                    }}>
+                      {['pending', 'approved', 'ready', 'dispensed'].map((status, index) => {
+                        const isActive = ['pending', 'approved', 'ready', 'dispensed'].indexOf(request.status) >= index;
+                        const isCurrent = request.status === status;
+                        return (
+                          <React.Fragment key={status}>
+                            <div style={{ 
+                              display: 'flex', 
+                              alignItems: 'center', 
+                              gap: '5px',
+                              flex: 1,
+                              minWidth: '120px'
+                            }}>
+                              <div style={{
+                                width: '32px',
+                                height: '32px',
+                                borderRadius: '50%',
+                                background: isActive ? (isCurrent ? '#D84040' : '#28a745') : '#dee2e6',
+                                color: isActive ? 'white' : '#6c757d',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontWeight: 'bold',
+                                fontSize: '14px',
+                                border: isCurrent ? '3px solid #A31D1D' : 'none',
+                                boxShadow: isCurrent ? '0 0 0 3px rgba(216, 64, 64, 0.2)' : 'none',
+                              }}>
+                                {isActive ? (isCurrent ? '✓' : '✓') : index + 1}
+                              </div>
+                              <div style={{ flex: 1 }}>
+                                <div style={{ 
+                                  fontSize: '12px', 
+                                  fontWeight: isCurrent ? 'bold' : 'normal',
+                                  color: isActive ? (isCurrent ? '#D84040' : '#28a745') : '#6c757d'
+                                }}>
+                                  {status === 'pending' ? 'Submitted' : 
+                                   status === 'approved' ? 'Approved' :
+                                   status === 'ready' ? 'Ready' : 'Dispensed'}
+                                </div>
+                                {isCurrent && request.status === 'pending' && (
+                                  <div style={{ fontSize: '10px', color: '#6c757d' }}>
+                                    {new Date(request.submitted_at).toLocaleDateString()}
+                                  </div>
+                                )}
+                                {isCurrent && request.status === 'approved' && request.processed_at && (
+                                  <div style={{ fontSize: '10px', color: '#6c757d' }}>
+                                    {new Date(request.processed_at).toLocaleDateString()}
+                                  </div>
+                                )}
+                                {isCurrent && request.status === 'ready' && request.ready_for_pickup_date && (
+                                  <div style={{ fontSize: '10px', color: '#6c757d' }}>
+                                    {new Date(request.ready_for_pickup_date).toLocaleDateString()}
+                                  </div>
+                                )}
+                                {isCurrent && request.status === 'dispensed' && request.dispensed_at && (
+                                  <div style={{ fontSize: '10px', color: '#6c757d' }}>
+                                    {new Date(request.dispensed_at).toLocaleDateString()}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                            {index < 3 && (
+                              <div style={{
+                                width: '20px',
+                                height: '2px',
+                                background: isActive && request.status !== status ? '#28a745' : '#dee2e6',
+                                margin: '0 5px',
+                                flex: '0 0 20px'
+                              }} />
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
-                    <h3 style={{ margin: 0, fontSize: '18px' }}>
+                    <h3 style={{ margin: 0, fontSize: '18px', color: '#A31D1D' }}>
                       {request.first_name} {request.last_name}
                     </h3>
                     {getStatusBadge(request.status)}
@@ -433,9 +518,9 @@ const RefillRequests = ({ socket }) => {
                     <span>Submitted: {new Date(request.submitted_at).toLocaleString()}</span>
                   </div>
                   
-                  {request.notes && (
+                  {request.patient_notes && (
                     <div style={{ marginTop: '10px', fontStyle: 'italic', color: '#6c757d' }}>
-                      "{request.notes}"
+                      "{request.patient_notes}"
                     </div>
                   )}
                 </div>
@@ -444,17 +529,20 @@ const RefillRequests = ({ socket }) => {
                   <button
                     style={{
                       padding: '8px 12px',
-                      background: '#f8f9fa',
-                      color: '#495057',
-                      border: '1px solid #dee2e6',
+                      background: '#ECDCBF',
+                      color: '#A31D1D',
+                      border: '1px solid #ECDCBF',
                       borderRadius: '4px',
                       cursor: 'pointer',
                       fontSize: '14px',
                       display: 'flex',
                       alignItems: 'center',
                       gap: '5px',
+                      fontWeight: 500,
                     }}
                     onClick={() => toggleRequestExpansion(request.refill_id)}
+                    onMouseEnter={(e) => (e.target.style.background = '#F8F2DE')}
+                    onMouseLeave={(e) => (e.target.style.background = '#ECDCBF')}
                   >
                     {expandedRequests[request.refill_id] ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                     Details
@@ -474,9 +562,11 @@ const RefillRequests = ({ socket }) => {
                           display: 'flex',
                           alignItems: 'center',
                           gap: '5px',
+                          fontWeight: 500,
                         }}
-                        // Updated function call
                         onClick={() => openApproveModal(request)}
+                        onMouseEnter={(e) => (e.target.style.background = '#218838')}
+                        onMouseLeave={(e) => (e.target.style.background = '#28a745')}
                       >
                         <CheckCircle size={16} />
                         Approve
@@ -484,7 +574,7 @@ const RefillRequests = ({ socket }) => {
                       <button
                         style={{
                           padding: '8px 12px',
-                          background: '#dc3545',
+                          background: '#D84040',
                           color: 'white',
                           border: 'none',
                           borderRadius: '4px',
@@ -493,9 +583,11 @@ const RefillRequests = ({ socket }) => {
                           display: 'flex',
                           alignItems: 'center',
                           gap: '5px',
+                          fontWeight: 500,
                         }}
-                        // Updated function call
                         onClick={() => openDeclineModal(request)}
+                        onMouseEnter={(e) => (e.target.style.background = '#A31D1D')}
+                        onMouseLeave={(e) => (e.target.style.background = '#D84040')}
                       >
                         <XCircle size={16} />
                         Decline
@@ -508,11 +600,12 @@ const RefillRequests = ({ socket }) => {
               {expandedRequests[request.refill_id] && (
                 <div style={{ 
                   padding: '15px', 
-                  backgroundColor: '#f8f9fa', 
+                  backgroundColor: '#F8F2DE', 
                   borderRadius: '8px',
-                  marginTop: '10px'
+                  marginTop: '10px',
+                  border: '1px solid #ECDCBF'
                 }}>
-                  <h4 style={{ margin: '0 0 10px 0', fontSize: '16px', color: '#495057' }}>
+                  <h4 style={{ margin: '0 0 10px 0', fontSize: '16px', color: '#A31D1D', fontWeight: '600' }}>
                     📊 Pill Count & Eligibility:
                   </h4>
                   
@@ -546,7 +639,7 @@ const RefillRequests = ({ socket }) => {
                       marginBottom: '10px',
                       border: '1px solid #ffc107'
                     }}>
-                      <strong>Explanation:</strong> {request.kulang_explanation}
+                      <strong style={{ color: '#A31D1D' }}>Explanation:</strong> {request.kulang_explanation}
                     </div>
                   )}
                   
@@ -555,17 +648,18 @@ const RefillRequests = ({ socket }) => {
                       padding: '10px', 
                       backgroundColor: '#d1ecf1', 
                       borderRadius: '4px',
-                      marginBottom: '10px'
+                      marginBottom: '10px',
+                      border: '1px solid #17a2b8'
                     }}>
-                      <strong>Approved Quantity:</strong> {request.approved_quantity} {request.unit || 'units'} 
+                      <strong style={{ color: '#A31D1D' }}>Approved Quantity:</strong> {request.approved_quantity} {request.unit || 'units'} 
                       (Requested: {request.quantity} {request.unit || 'units'})
                     </div>
                   )}
                   
                   {request.ready_for_pickup_date && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#495057', marginBottom: '10px' }}>
-                      <span>📅 Ready for Pickup:</span>
-                      <strong>{new Date(request.ready_for_pickup_date).toLocaleDateString()}</strong>
+                      <Calendar size={16} />
+                      <span><strong>Ready for Pickup:</strong> {new Date(request.ready_for_pickup_date).toLocaleDateString()}</span>
                     </div>
                   )}
                   
@@ -574,9 +668,10 @@ const RefillRequests = ({ socket }) => {
                       padding: '10px', 
                       backgroundColor: '#e7f3ff', 
                       borderRadius: '4px',
-                      marginBottom: '10px'
+                      marginBottom: '10px',
+                      border: '1px solid #17a2b8'
                     }}>
-                      <strong>Review Notes:</strong> {request.review_notes}
+                      <strong style={{ color: '#A31D1D' }}>Review Notes:</strong> {request.review_notes}
                     </div>
                   )}
                   
@@ -586,9 +681,9 @@ const RefillRequests = ({ socket }) => {
                       backgroundColor: '#f8d7da', 
                       borderRadius: '4px',
                       marginBottom: '10px',
-                      border: '1px solid #dc3545'
+                      border: '1px solid #D84040'
                     }}>
-                      <strong>Decline Reason:</strong> {request.decline_reason}
+                      <strong style={{ color: '#A31D1D' }}>Decline Reason:</strong> {request.decline_reason}
                     </div>
                   )}
                   
@@ -654,12 +749,14 @@ const RefillRequests = ({ socket }) => {
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-              <h3 style={{ margin: 0, fontSize: '20px', color: '#333' }}>Approve Refill Request</h3>
+              <h3 style={{ margin: 0, fontSize: '20px', color: '#A31D1D', fontWeight: 'bold' }}>Approve Refill Request</h3>
               <button
                 onClick={() => {
                   setShowApproveModal(false);
                   setSelectedRequest(null);
                   setApproveNotes('');
+                  setApprovedQuantity('');
+                  setReadyForPickupDate('');
                 }}
                 style={{
                   background: 'none',
@@ -668,7 +765,7 @@ const RefillRequests = ({ socket }) => {
                   padding: '4px',
                 }}
               >
-                <X size={24} />
+                <X size={24} color="#A31D1D" />
               </button>
             </div>
 
@@ -712,7 +809,7 @@ const RefillRequests = ({ socket }) => {
               </div>
               
               <div style={{ marginBottom: '15px' }}>
-                <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px', fontWeight: 500 }}>
+                <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px', fontWeight: 'bold', color: '#A31D1D' }}>
                   Approved Quantity (optional)
                 </label>
                 <input
@@ -735,7 +832,7 @@ const RefillRequests = ({ socket }) => {
               </div>
               
               <div style={{ marginBottom: '15px' }}>
-                <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px', fontWeight: 500 }}>
+                <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px', fontWeight: 'bold', color: '#A31D1D' }}>
                   Ready for Pickup Date (optional)
                 </label>
                 <input
@@ -757,7 +854,7 @@ const RefillRequests = ({ socket }) => {
               </div>
               
               <div>
-                <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px', fontWeight: 500 }}>
+                <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px', fontWeight: 'bold', color: '#A31D1D' }}>
                   Review Notes (optional)
                 </label>
                 <textarea
@@ -783,16 +880,21 @@ const RefillRequests = ({ socket }) => {
                   setShowApproveModal(false);
                   setSelectedRequest(null);
                   setApproveNotes('');
+                  setApprovedQuantity('');
+                  setReadyForPickupDate('');
                 }}
                 style={{
                   padding: '10px 20px',
-                  background: '#6c757d',
-                  color: 'white',
+                  background: '#ECDCBF',
+                  color: '#A31D1D',
                   border: 'none',
                   borderRadius: '4px',
                   cursor: 'pointer',
                   fontSize: '14px',
+                  fontWeight: 500,
                 }}
+                onMouseEnter={(e) => (e.target.style.background = '#F8F2DE')}
+                onMouseLeave={(e) => (e.target.style.background = '#ECDCBF')}
               >
                 Cancel
               </button>
@@ -808,6 +910,8 @@ const RefillRequests = ({ socket }) => {
                   fontSize: '14px',
                   fontWeight: 600,
                 }}
+                onMouseEnter={(e) => (e.target.style.background = '#218838')}
+                onMouseLeave={(e) => (e.target.style.background = '#28a745')}
               >
                 Approve Request
               </button>
@@ -844,7 +948,7 @@ const RefillRequests = ({ socket }) => {
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-              <h3 style={{ margin: 0, fontSize: '20px', color: '#333' }}>Decline Refill Request</h3>
+              <h3 style={{ margin: 0, fontSize: '20px', color: '#A31D1D', fontWeight: 'bold' }}>Decline Refill Request</h3>
               <button
                 onClick={() => {
                   setShowDeclineModal(false);
@@ -858,7 +962,7 @@ const RefillRequests = ({ socket }) => {
                   padding: '4px',
                 }}
               >
-                <X size={24} />
+                <X size={24} color="#A31D1D" />
               </button>
             </div>
 
@@ -869,46 +973,47 @@ const RefillRequests = ({ socket }) => {
               
               <div style={{ 
                 padding: '15px', 
-                backgroundColor: '#f8f9fa', 
+                backgroundColor: '#F8F2DE', 
                 borderRadius: '8px',
-                marginBottom: '15px'
+                marginBottom: '15px',
+                border: '1px solid #ECDCBF'
               }}>
                 <div style={{ marginBottom: '10px' }}>
-                  <strong>Patient:</strong> {selectedRequest.first_name} {selectedRequest.last_name}
+                  <strong style={{ color: '#A31D1D' }}>Patient:</strong> {selectedRequest.first_name} {selectedRequest.last_name}
                 </div>
                 <div style={{ marginBottom: '10px' }}>
-                  <strong>Medication:</strong> {selectedRequest.medication_name} {selectedRequest.strength && `(${selectedRequest.strength})`}
+                  <strong style={{ color: '#A31D1D' }}>Medication:</strong> {selectedRequest.medication_name} {selectedRequest.strength && `(${selectedRequest.strength})`}
                 </div>
-                    <div style={{ marginBottom: '10px' }}>
-                      <strong>Quantity Requested:</strong> {selectedRequest.quantity} {selectedRequest.unit || selectedRequest.form || 'units'}
-                    </div>
-                    {selectedRequest.remaining_pill_count !== null && (
-                      <div style={{ marginBottom: '10px' }}>
-                        <strong>Remaining Pills:</strong> {selectedRequest.remaining_pill_count}
-                        {selectedRequest.pill_status && (
-                          <span style={{ 
-                            color: selectedRequest.pill_status === 'kulang' ? '#dc3545' : 
-                                   selectedRequest.pill_status === 'sobra' ? '#ffc107' : '#28a745',
-                            marginLeft: '10px'
-                          }}>
-                            ({selectedRequest.pill_status.toUpperCase()})
-                          </span>
-                        )}
-                      </div>
+                <div style={{ marginBottom: '10px' }}>
+                  <strong style={{ color: '#A31D1D' }}>Quantity Requested:</strong> {selectedRequest.quantity} {selectedRequest.unit || selectedRequest.form || 'units'}
+                </div>
+                {selectedRequest.remaining_pill_count !== null && (
+                  <div style={{ marginBottom: '10px' }}>
+                    <strong style={{ color: '#A31D1D' }}>Remaining Pills:</strong> {selectedRequest.remaining_pill_count}
+                    {selectedRequest.pill_status && (
+                      <span style={{ 
+                        color: selectedRequest.pill_status === 'kulang' ? '#dc3545' : 
+                               selectedRequest.pill_status === 'sobra' ? '#ffc107' : '#28a745',
+                        marginLeft: '10px'
+                      }}>
+                        ({selectedRequest.pill_status.toUpperCase()})
+                      </span>
                     )}
-                    <div style={{ marginBottom: '10px' }}>
-                      <strong>Preferred Pickup Date:</strong> {new Date(selectedRequest.pickup_date).toLocaleDateString()}
-                      {selectedRequest.preferred_pickup_time && (
-                        <span> at {selectedRequest.preferred_pickup_time}</span>
-                      )}
-                    </div>
-                    <div>
-                      <strong>Facility:</strong> {selectedRequest.facility_name}
-                    </div>
                   </div>
+                )}
+                <div style={{ marginBottom: '10px' }}>
+                  <strong style={{ color: '#A31D1D' }}>Preferred Pickup Date:</strong> {new Date(selectedRequest.pickup_date).toLocaleDateString()}
+                  {selectedRequest.preferred_pickup_time && (
+                    <span> at {selectedRequest.preferred_pickup_time}</span>
+                  )}
+                </div>
+                <div>
+                  <strong style={{ color: '#A31D1D' }}>Facility:</strong> {selectedRequest.facility_name}
+                </div>
+              </div>
                   
                   <div>
-                    <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px', fontWeight: 500 }}>
+                    <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px', fontWeight: 'bold', color: '#A31D1D' }}>
                       Reason for Decline <span style={{ color: '#dc3545' }}>*</span>
                     </label>
                 <textarea
@@ -937,13 +1042,16 @@ const RefillRequests = ({ socket }) => {
                 }}
                 style={{
                   padding: '10px 20px',
-                  background: '#6c757d',
-                  color: 'white',
+                  background: '#ECDCBF',
+                  color: '#A31D1D',
                   border: 'none',
                   borderRadius: '4px',
                   cursor: 'pointer',
                   fontSize: '14px',
+                  fontWeight: 500,
                 }}
+                onMouseEnter={(e) => (e.target.style.background = '#F8F2DE')}
+                onMouseLeave={(e) => (e.target.style.background = '#ECDCBF')}
               >
                 Cancel
               </button>
@@ -951,7 +1059,7 @@ const RefillRequests = ({ socket }) => {
                 onClick={handleDeclineRequest}
                 style={{
                   padding: '10px 20px',
-                  background: '#dc3545',
+                  background: '#D84040',
                   color: 'white',
                   border: 'none',
                   borderRadius: '4px',
@@ -959,6 +1067,8 @@ const RefillRequests = ({ socket }) => {
                   fontSize: '14px',
                   fontWeight: 600,
                 }}
+                onMouseEnter={(e) => (e.target.style.background = '#A31D1D')}
+                onMouseLeave={(e) => (e.target.style.background = '#D84040')}
               >
                 Decline Request
               </button>
@@ -974,16 +1084,21 @@ const RefillRequests = ({ socket }) => {
             position: 'fixed',
             bottom: '20px',
             right: '20px',
-            backgroundColor: toast.type === 'success' ? '#28a745' : '#dc3545',
+            backgroundColor:
+              toast.type === 'success'
+                ? '#28a745'
+                : toast.type === 'error'
+                ? '#A31D1D'
+                : '#17a2b8',
             color: 'white',
             padding: '16px 20px',
             borderRadius: '8px',
             boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+            zIndex: 10000,
+            maxWidth: '400px',
             display: 'flex',
             alignItems: 'center',
             gap: '12px',
-            minWidth: '300px',
-            zIndex: 9999,
           }}
         >
           <AlertCircle size={20} />

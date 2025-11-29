@@ -410,6 +410,82 @@ router.put('/:id/status', authenticateToken, async (req, res) => {
   }
 });
 
+/**
+ * GET /api/users/:id/permissions - Get all permissions for a user
+ * 
+ * HOW IT WORKS:
+ * 1. User can view their own permissions
+ * 2. Admin can view any user's permissions
+ * 3. Queries: user_roles → role_permissions → permissions
+ * 4. Returns list of all permissions the user has through their roles
+ * 
+ * USAGE:
+ * GET /api/users/{user_id}/permissions
+ * Headers: Authorization: Bearer {token}
+ */
+router.get('/:id/permissions', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const requestingUserId = req.user.user_id;
+    const requestingUserRole = req.user.role;
+
+    // Users can only view their own permissions, unless they're admin
+    if (requestingUserId !== id && requestingUserRole !== 'admin') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Access denied. You can only view your own permissions.' 
+      });
+    }
+
+    // Query: Get all permissions for this user through their roles
+    // Flow: user_roles → role_permissions → permissions
+    const [permissions] = await db.query(
+      `SELECT DISTINCT 
+         p.permission_id,
+         p.permission_code,
+         p.permission_name,
+         p.module,
+         p.action,
+         p.description,
+         r.role_id,
+         r.role_name,
+         r.role_code,
+         ur.assigned_at
+       FROM permissions p
+       INNER JOIN role_permissions rp ON p.permission_id = rp.permission_id
+       INNER JOIN roles r ON rp.role_id = r.role_id
+       INNER JOIN user_roles ur ON r.role_id = ur.role_id
+       WHERE ur.user_id = ?
+       ORDER BY p.module, p.permission_name ASC`,
+      [id]
+    );
+
+    // Also get user's roles for context
+    const [roles] = await db.query(
+      `SELECT r.role_id, r.role_code, r.role_name, r.description, ur.assigned_at
+       FROM roles r
+       INNER JOIN user_roles ur ON r.role_id = ur.role_id
+       WHERE ur.user_id = ?
+       ORDER BY r.role_name ASC`,
+      [id]
+    );
+
+    res.json({ 
+      success: true, 
+      permissions,
+      roles,
+      user_id: id
+    });
+  } catch (error) {
+    console.error('Error fetching user permissions:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch user permissions',
+      error: error.message 
+    });
+  }
+});
+
 export default router;
 
 

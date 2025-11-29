@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   X,
   Plus,
@@ -24,6 +25,8 @@ import {
 const API_BASE_URL = 'http://localhost:5000/api';
 
 const Medications = ({ socket }) => {
+  const location = useLocation();
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('medications');
   const [myMedications, setMyMedications] = useState([]);
   const [refillRequests, setRefillRequests] = useState([]);
@@ -72,12 +75,26 @@ const Medications = ({ socket }) => {
     setCurrentUser(user);
     setUserRole(user.role || 'patient');
     
+    // Check URL params for tab
+    const params = new URLSearchParams(location.search);
+    const tabParam = params.get('tab');
+    if (tabParam === 'refills') {
+      // Only allow case managers to access refill requests tab
+      if (user.role === 'case manager' || user.role === 'admin') {
+        setActiveTab('refills');
+      } else {
+        // Redirect non-case managers to medications tab
+        navigate('/medications', { replace: true });
+        setActiveTab('medications');
+      }
+    }
+    
     // If user is a patient, fetch their patient_id
     if (user.role === 'patient' && user.user_id) {
       console.log('Fetching patient ID for user:', user.user_id); // Debug log
       fetchPatientId(user.user_id);
     }
-  }, []);
+  }, [location.search]);
 
   // Add this function to fetch patient_id
   const fetchPatientId = async (userId) => {
@@ -522,6 +539,46 @@ const Medications = ({ socket }) => {
     }
   };
 
+  const handleDispenseRefill = async (request) => {
+    try {
+      if (!window.confirm(`Are you sure you want to dispense ${request.quantity} ${request.unit} of ${request.medication_name}? This will reduce inventory.`)) {
+        return;
+      }
+
+      const token = localStorage.getItem('token');
+      
+      const response = await fetch(`${API_BASE_URL}/refill-requests/${request.refill_id}/status`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token && { Authorization: `Bearer ${token}` }),
+        },
+        body: JSON.stringify({
+          status: 'dispensed',
+          user_id: currentUser.user_id
+        }),
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        setToast({
+          message: 'Medication dispensed successfully. Inventory has been updated.',
+          type: 'success',
+        });
+        fetchRefillRequests();
+      } else {
+        throw new Error(data.message);
+      }
+    } catch (error) {
+      console.error('Error dispensing refill request:', error);
+      setToast({
+        message: 'Failed to dispense medication: ' + error.message,
+        type: 'error',
+      });
+    }
+  };
+
   // Fixed function names to avoid conflicts with state variables
   const openRefillModal = (medication) => {
     setSelectedMedication(medication);
@@ -730,47 +787,50 @@ const Medications = ({ socket }) => {
             <Pill size={18} />
             My Medications
           </button>
-          <button
-            onClick={() => setActiveTab('refills')}
-            style={{
-              padding: '12px 24px',
-              background: 'none',
-              border: 'none',
-              borderBottom: activeTab === 'refills' ? '3px solid #D84040' : '3px solid transparent',
-              cursor: 'pointer',
-              fontSize: '16px',
-              fontWeight: activeTab === 'refills' ? '600' : '400',
-              color: activeTab === 'refills' ? '#D84040' : '#6c757d',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              position: 'relative',
-            }}
-          >
-            <Package size={18} />
-            Refill Requests
-            {currentUser && currentUser.role === 'case manager' && pendingCount > 0 && (
-              <span
-                style={{
-                  position: 'absolute',
-                  top: '8px',
-                  right: '8px',
-                  backgroundColor: '#ffc107',
-                  color: '#212529',
-                  borderRadius: '50%',
-                  width: '20px',
-                  height: '20px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontSize: '12px',
-                  fontWeight: '600',
-                }}
-              >
-                {pendingCount}
-              </span>
-            )}
-          </button>
+          {/* Only show Refill Requests tab for case managers */}
+          {(currentUser && (currentUser.role === 'case manager' || currentUser.role === 'admin')) && (
+            <button
+              onClick={() => setActiveTab('refills')}
+              style={{
+                padding: '12px 24px',
+                background: 'none',
+                border: 'none',
+                borderBottom: activeTab === 'refills' ? '3px solid #D84040' : '3px solid transparent',
+                cursor: 'pointer',
+                fontSize: '16px',
+                fontWeight: activeTab === 'refills' ? '600' : '400',
+                color: activeTab === 'refills' ? '#D84040' : '#6c757d',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                position: 'relative',
+              }}
+            >
+              <Package size={18} />
+              Refill Requests
+              {pendingCount > 0 && (
+                <span
+                  style={{
+                    position: 'absolute',
+                    top: '8px',
+                    right: '8px',
+                    backgroundColor: '#ffc107',
+                    color: '#212529',
+                    borderRadius: '50%',
+                    width: '20px',
+                    height: '20px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '12px',
+                    fontWeight: '600',
+                  }}
+                >
+                  {pendingCount}
+                </span>
+              )}
+            </button>
+          )}
         </div>
       </div>
 
@@ -1104,6 +1164,26 @@ const Medications = ({ socket }) => {
                               </button>
                             </>
                           )}
+                          {(request.status === 'approved' || request.status === 'ready') && (
+                            <button
+                              style={{
+                                padding: '8px 12px',
+                                background: '#6f42c1',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '4px',
+                                cursor: 'pointer',
+                                fontSize: '14px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '5px',
+                              }}
+                              onClick={() => handleDispenseRefill(request)}
+                            >
+                              <Package size={16} />
+                              Dispense
+                            </button>
+                          )}
                         </>
                       )}
                     </div>
@@ -1122,10 +1202,33 @@ const Medications = ({ socket }) => {
                       
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '15px', marginBottom: '10px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#495057' }}>
-                          <span>🔢 Remaining:</span>
-                          <strong>Not reported</strong>
+                          <span>🔢 Remaining Pills:</span>
+                          <strong>{request.remaining_pill_count !== null && request.remaining_pill_count !== undefined ? request.remaining_pill_count : 'Not reported'}</strong>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#495057' }}>
+                          <span>💊 Pills Per Day:</span>
+                          <strong>{request.pills_per_day || 'N/A'}</strong>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#495057' }}>
+                          <span>📊 Pill Status:</span>
+                          <strong>
+                            {request.pill_status === 'kulang' ? '⚠️ Kulang (Low)' : 
+                             request.pill_status === 'sobra' ? '✅ Sobra (More than expected)' : 
+                             request.pill_status === 'sakto' ? '✓ Sakto (Expected)' : 'N/A'}
+                          </strong>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#495057' }}>
+                          <span>✅ Eligible:</span>
+                          <strong>{request.is_eligible_for_refill ? 'Yes (≤10 pills)' : 'No (>10 pills)'}</strong>
                         </div>
                       </div>
+                      
+                      {request.kulang_explanation && (
+                        <div style={{ marginTop: '10px', padding: '10px', background: '#fff3cd', borderRadius: '4px' }}>
+                          <strong>⚠️ Low Pill Count Explanation:</strong>
+                          <p style={{ margin: '5px 0 0 0', fontSize: '14px' }}>{request.kulang_explanation}</p>
+                        </div>
+                      )}
                       
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '15px', marginBottom: '10px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#495057' }}>

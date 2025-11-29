@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { BarChart3, TrendingUp, Users, Star, Calendar } from 'lucide-react';
+import { BarChart3, TrendingUp, Users, Star, Calendar, List, ArrowRight } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { API_BASE_URL } from '../config/api.js';
 
 const SurveyMetrics = ({ socket }) => {
+  const navigate = useNavigate();
   const [metrics, setMetrics] = useState([]);
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -201,13 +203,37 @@ const SurveyMetrics = ({ socket }) => {
   return (
     <div style={{ padding: '20px' }}>
       <div style={{ marginBottom: '30px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
-          <BarChart3 size={28} color="#D84040" />
-          <h2 style={{ margin: 0, color: '#333', fontSize: '28px' }}>Survey Metrics & Analytics</h2>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
+              <BarChart3 size={28} color="#D84040" />
+              <h2 style={{ margin: 0, color: '#333', fontSize: '28px' }}>Survey Metrics & Analytics</h2>
+            </div>
+            <p style={{ margin: '5px 0 0 0', color: '#6c757d', fontSize: '14px' }}>
+              View patient satisfaction metrics and trends
+            </p>
+          </div>
+          <button
+            onClick={() => navigate('/survey-responses')}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '10px 20px',
+              background: '#D84040',
+              color: 'white',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontSize: '14px',
+              fontWeight: '500',
+            }}
+          >
+            <List size={18} />
+            View All Responses
+            <ArrowRight size={16} />
+          </button>
         </div>
-        <p style={{ margin: '5px 0 0 0', color: '#6c757d', fontSize: '14px' }}>
-          View patient satisfaction metrics and trends
-        </p>
       </div>
 
       {/* Filters */}

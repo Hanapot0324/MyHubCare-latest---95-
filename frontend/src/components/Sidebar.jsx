@@ -44,7 +44,8 @@ import {
   LocalShipping as SuppliersIcon,
   ShoppingCart as OrdersIcon,
   Schedule as ScheduleIcon,
-  Vaccines as VaccinesIcon
+  Vaccines as VaccinesIcon,
+  NotificationsActive as RemindersIcon
 } from '@mui/icons-material';
 
 const drawerWidth = 260;
@@ -76,12 +77,14 @@ const ROLE_MENU_ITEMS = {
     },
     { id: 'prescriptions', text: 'Prescriptions', icon: <DescriptionIcon />, path: '/prescriptions' },
     { id: 'art-regimen', text: 'ART Regimens', icon: <MedicationIcon />, path: '/art-regimen' },
+    { id: 'vaccinations', text: 'Vaccination Program', icon: <VaccinesIcon />, path: '/vaccinations' },
     { id: 'lab-tests', text: 'Lab Tests', icon: <ScienceIcon />, path: '/lab-test' },
     { id: 'hts', text: 'HTS Sessions', icon: <AssignmentIcon />, path: '/hts-sessions' },
     { id: 'counseling', text: 'Counseling', icon: <ListAltIcon />, path: '/counseling' },
     { id: 'referrals', text: 'Referrals', icon: <HospitalIcon />, path: '/referrals' },
     { id: 'care-tasks', text: 'Care Tasks', icon: <CheckIcon />, path: '/care-tasks' },
     { id: 'surveys', text: 'Satisfaction Surveys', icon: <RateReviewIcon />, path: '/survey-metrics' },
+    { id: 'survey-responses', text: 'Survey Responses', icon: <ListAltIcon />, path: '/survey-responses' },
     { id: 'users', text: 'User Management', icon: <ManageAccountsIcon />, path: '/users' },
     { id: 'facilities', text: 'My Hub Cares Branches', icon: <BusinessIcon />, path: '/branch-management' },
     { id: 'audit', text: 'Audit Trail', icon: <HistoryIcon />, path: '/audit-trail' },
@@ -95,9 +98,11 @@ const ROLE_MENU_ITEMS = {
     { id: 'clinical-visits', text: 'Clinical Visits', icon: <MedicalServicesIcon />, path: '/clinical-visit' },
     { id: 'prescriptions', text: 'Prescriptions', icon: <DescriptionIcon />, path: '/prescriptions' },
     { id: 'art-regimen', text: 'ART Regimens', icon: <MedicationIcon />, path: '/art-regimen' },
+    { id: 'vaccinations', text: 'Vaccination Program', icon: <VaccinesIcon />, path: '/vaccinations' },
     { id: 'lab-results', text: 'Lab Results', icon: <ScienceIcon />, path: '/lab-test' },
     { id: 'counseling', text: 'Counseling', icon: <ListAltIcon />, path: '/counseling' },
     { id: 'care-tasks', text: 'Care Tasks', icon: <CheckIcon />, path: '/care-tasks' },
+    { id: 'surveys', text: 'Satisfaction Surveys', icon: <RateReviewIcon />, path: '/survey-metrics' },
     { id: 'inventory', text: 'Inventory', icon: <InventoryIcon />, path: '/inventory' },
     { id: 'audit', text: 'My Activity Log', icon: <HistoryIcon />, path: '/audit-trail' },
     { id: 'education', text: 'Education', icon: <SchoolIcon />, path: '/education' }
@@ -107,6 +112,7 @@ const ROLE_MENU_ITEMS = {
     { id: 'patients', text: 'Patients', icon: <PeopleIcon />, path: '/patient' },
     { id: 'appointments', text: 'Appointments', icon: <CalendarIcon />, path: '/appointments' },
     { id: 'clinical-visits', text: 'Clinical Visits', icon: <MedicalServicesIcon />, path: '/clinical-visit' },
+    { id: 'vaccinations', text: 'Vaccination Program', icon: <VaccinesIcon />, path: '/vaccinations' },
     { id: 'inventory', text: 'Inventory', icon: <InventoryIcon />, path: '/inventory' },
     { id: 'prescriptions', text: 'Prescriptions', icon: <DescriptionIcon />, path: '/prescriptions' },
     { id: 'hts', text: 'HTS Sessions', icon: <AssignmentIcon />, path: '/hts-sessions' },
@@ -123,6 +129,7 @@ const ROLE_MENU_ITEMS = {
     { id: 'counseling', text: 'Counseling', icon: <ListAltIcon />, path: '/counseling' },
     { id: 'referrals', text: 'Referrals', icon: <HospitalIcon />, path: '/referrals' },
     { id: 'care-tasks', text: 'Care Tasks', icon: <CheckIcon />, path: '/care-tasks' },
+    { id: 'surveys', text: 'Satisfaction Surveys', icon: <RateReviewIcon />, path: '/survey-metrics' },
     { id: 'hts', text: 'HTS Sessions', icon: <AssignmentIcon />, path: '/hts-sessions' },
     { id: 'audit', text: 'My Activity Log', icon: <HistoryIcon />, path: '/audit-trail' },
     { id: 'education', text: 'Education', icon: <SchoolIcon />, path: '/education' }
@@ -139,7 +146,8 @@ const ROLE_MENU_ITEMS = {
     { id: 'dashboard', text: 'My Dashboard', icon: <DashboardIcon />, path: '/dashboard' },
     { id: 'profile', text: 'My Profile', icon: <PersonIcon />, path: '/profile' },
     { id: 'appointments', text: 'My Appointments', icon: <CalendarIcon />, path: '/my-appointments' },
-    { id: 'medications', text: 'My Medications', icon: <MedicationIcon />, path: '/medications', badge: 'NEW' },
+    { id: 'my-medications', text: 'My Medications', icon: <MedicationIcon />, path: '/my-medications', badge: 'NEW' },
+    { id: 'vaccinations', text: 'My Vaccinations', icon: <VaccinesIcon />, path: '/vaccinations' },
     { id: 'prescriptions', text: 'Prescriptions', icon: <DescriptionIcon />, path: '/prescriptions' },
     { id: 'lab-results', text: 'Lab Results', icon: <ScienceIcon />, path: '/lab-test' },
     { id: 'feedback', text: 'Feedback', icon: <RateReviewIcon />, path: '/patient-survey' },
@@ -180,6 +188,7 @@ const Sidebar = () => {
       const userStr = localStorage.getItem('user');
       if (userStr) {
         const user = JSON.parse(userStr);
+        console.log('Sidebar: User role from localStorage:', user.role);
         setUserRole(user.role);
       } else {
         const token = localStorage.getItem('token');
@@ -190,6 +199,7 @@ const Sidebar = () => {
           if (response.ok) {
             const data = await response.json();
             if (data.success) {
+              console.log('Sidebar: User role from API:', data.user.role);
               setUserRole(data.user.role);
             }
           }
@@ -211,6 +221,15 @@ const Sidebar = () => {
   };
 
   const menuItems = ROLE_MENU_ITEMS[userRole] || [];
+  
+  // Debug logging
+  useEffect(() => {
+    if (userRole) {
+      console.log('Sidebar: Current user role:', userRole);
+      console.log('Sidebar: Available menu items:', menuItems.length);
+      console.log('Sidebar: Menu items:', menuItems.map(item => item.text));
+    }
+  }, [userRole, menuItems]);
 
   return (
     <Drawer

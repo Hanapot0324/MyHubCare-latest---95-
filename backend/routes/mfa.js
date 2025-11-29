@@ -225,8 +225,17 @@ router.post("/generate", async (req, res) => {
         });
       }
 
-      // TODO: Send email via email service provider
-      console.log(`[MFA Email] Code for ${user.username}: ${code}`);
+      // Send email via email service
+      const { sendMFACode } = await import('../utils/emailService.js');
+      const emailResult = await sendMFACode(email, code, user.full_name || user.username);
+      
+      if (!emailResult.success) {
+        console.error(`[MFA Email] Failed to send email to ${email}:`, emailResult.error);
+        // Still allow the process to continue - code is stored in database
+        // User can check their email or contact support
+      } else {
+        console.log(`[MFA Email] Code sent successfully to ${email}`);
+      }
     }
 
     // Create MFA token record
@@ -572,11 +581,18 @@ router.get("/status/:user_id", async (req, res) => {
       [user_id]
     );
 
+    // Get the most recent MFA method used (if any)
+    const [recentToken] = await db.query(
+      "SELECT method FROM mfa_tokens WHERE user_id = ? ORDER BY issued_at DESC LIMIT 1",
+      [user_id]
+    );
+
     res.json({
       success: true,
       data: {
         user_id: user.user_id,
         mfa_enabled: user.mfa_enabled === 1 || user.mfa_enabled === true,
+        method: recentToken[0]?.method || null,
         email: user.email,
         phone: user.phone,
         active_tokens: activeTokens[0]?.count || 0,

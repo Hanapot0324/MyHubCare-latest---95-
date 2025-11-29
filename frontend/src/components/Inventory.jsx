@@ -15,11 +15,32 @@ const Inventory = () => {
   const [toast, setToast] = useState(null);
   const [loading, setLoading] = useState(true);
   const [medications, setMedications] = useState([]);
+  const [inventoryAlerts, setInventoryAlerts] = useState([]);
+  const [showAlerts, setShowAlerts] = useState(false);
 
   useEffect(() => {
     fetchInventory();
     fetchMedications();
+    fetchInventoryAlerts();
   }, []);
+
+  // Fetch inventory alerts
+  const fetchInventoryAlerts = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${API_BASE_URL}/inventory-alerts/unacknowledged`, {
+        headers: {
+          ...(token && { Authorization: `Bearer ${token}` }),
+        },
+      });
+      const data = await response.json();
+      if (data.success) {
+        setInventoryAlerts(data.data || []);
+      }
+    } catch (error) {
+      console.error('Error fetching inventory alerts:', error);
+    }
+  };
   
 
   const fetchInventory = async () => {
@@ -98,6 +119,7 @@ const Inventory = () => {
         });
         setShowModal(false);
         fetchInventory(); // Refresh inventory list
+        fetchInventoryAlerts(); // Refresh alerts
       } else {
         throw new Error(data.message);
       }
@@ -137,6 +159,7 @@ const Inventory = () => {
         setShowEditModal(false);
         setEditingItem(null);
         fetchInventory(); // Refresh inventory list
+        fetchInventoryAlerts(); // Refresh alerts
       } else {
         throw new Error(data.message);
       }
@@ -176,6 +199,7 @@ const Inventory = () => {
         setShowRestockModal(false);
         setRestockingItem(null);
         fetchInventory(); // Refresh inventory list
+        fetchInventoryAlerts(); // Refresh alerts
       } else {
         throw new Error(data.message);
       }
@@ -443,7 +467,54 @@ const Inventory = () => {
             <h2 style={{ margin: '0 0 5px 0', color: 'white', fontSize: '24px', fontWeight: 'bold' }}>Inventory Management</h2>
             <p style={{ margin: 0, color: '#F8F2DE', fontSize: '16px' }}>Manage medication stock and supplies</p>
           </div>
-          <div style={{ display: 'flex', gap: '10px' }}>
+          <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+            {inventoryAlerts.length > 0 && (
+              <button
+                onClick={() => setShowAlerts(!showAlerts)}
+                style={{
+                  padding: '10px 16px',
+                  background: inventoryAlerts.some(a => a.alert_level === 'critical') ? '#dc3545' : '#ffc107',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s ease',
+                  fontWeight: '500',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  position: 'relative',
+                }}
+                onMouseEnter={(e) => {
+                  e.target.style.transform = 'translateY(-1px)';
+                }}
+                onMouseLeave={(e) => {
+                  e.target.style.transform = 'translateY(0)';
+                }}
+              >
+                <AlertCircle size={16} />
+                Alerts ({inventoryAlerts.length})
+                {inventoryAlerts.some(a => a.alert_level === 'critical') && (
+                  <span style={{
+                    position: 'absolute',
+                    top: '-5px',
+                    right: '-5px',
+                    background: '#fff',
+                    color: '#dc3545',
+                    borderRadius: '50%',
+                    width: '20px',
+                    height: '20px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '12px',
+                    fontWeight: 'bold',
+                  }}>
+                    !
+                  </span>
+                )}
+              </button>
+            )}
             <button
               onClick={handleShowAddItemModal}
               style={{
@@ -474,6 +545,66 @@ const Inventory = () => {
           </div>
         </div>
       </div>
+
+      {/* Inventory Alerts Panel */}
+      {showAlerts && inventoryAlerts.length > 0 && (
+        <div style={{
+          marginBottom: '20px',
+          padding: '15px',
+          background: '#fff3cd',
+          border: '1px solid #ffc107',
+          borderRadius: '8px',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+            <h3 style={{ margin: 0, color: '#856404', fontSize: '18px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <AlertCircle size={20} />
+              Inventory Alerts ({inventoryAlerts.length})
+            </h3>
+            <button
+              onClick={() => setShowAlerts(false)}
+              style={{
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                padding: '5px',
+              }}
+            >
+              <X size={20} color="#856404" />
+            </button>
+          </div>
+          <div style={{ maxHeight: '300px', overflowY: 'auto' }}>
+            {inventoryAlerts.map((alert) => (
+              <div
+                key={alert.alert_id}
+                style={{
+                  padding: '12px',
+                  marginBottom: '10px',
+                  background: alert.alert_level === 'critical' ? '#f8d7da' : alert.alert_level === 'warning' ? '#fff3cd' : '#d1ecf1',
+                  borderLeft: `4px solid ${alert.alert_level === 'critical' ? '#dc3545' : alert.alert_level === 'warning' ? '#ffc107' : '#17a2b8'}`,
+                  borderRadius: '4px',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 'bold', color: '#333', marginBottom: '5px' }}>
+                      {alert.medication_name}
+                    </div>
+                    <div style={{ fontSize: '14px', color: '#666', marginBottom: '5px' }}>
+                      {alert.message}
+                    </div>
+                    <div style={{ fontSize: '12px', color: '#888' }}>
+                      <strong>Type:</strong> {alert.alert_type.replace('_', ' ').toUpperCase()} | 
+                      <strong> Level:</strong> {alert.alert_level.toUpperCase()} |
+                      <strong> Created:</strong> {new Date(alert.created_at).toLocaleString()}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Search and Filter */}
       <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>

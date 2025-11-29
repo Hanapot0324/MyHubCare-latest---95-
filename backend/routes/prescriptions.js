@@ -7,8 +7,16 @@ import { calculateARPARiskScore } from '../services/arpaService.js';
 
 const router = express.Router();
 
+// Socket.IO instance (will be set by server.js)
+let io = null;
+
+// Function to set Socket.IO instance
+export const setSocketIO = (socketIO) => {
+  io = socketIO;
+};
+
 // Get all prescriptions
-router.get('/', async (req, res) => {
+router.get('/', authenticateToken, async (req, res) => {
   try {
     const { patient_id, prescriber_id, facility_id, status } = req.query;
 
@@ -25,7 +33,33 @@ router.get('/', async (req, res) => {
     const params = [];
     const conditions = [];
 
-    if (patient_id) {
+    // Role-based filtering: Patients only see their own prescriptions
+    if (req.user.role === 'patient') {
+      // Get patient_id from user's linked patient record
+      let userPatientId = req.user.patient_id;
+      if (!userPatientId) {
+        // Try to find patient record for this user
+        const [patientRows] = await db.query(`
+          SELECT patient_id FROM patients 
+          WHERE created_by = ? OR email IN (SELECT email FROM users WHERE user_id = ?)
+          LIMIT 1
+        `, [req.user.user_id, req.user.user_id]);
+        
+        if (patientRows.length > 0) {
+          userPatientId = patientRows[0].patient_id;
+        } else {
+          // If no patient record found, return empty results
+          return res.json({
+            success: true,
+            prescriptions: [],
+            data: [],
+          });
+        }
+      }
+      conditions.push('p.patient_id = ?');
+      params.push(userPatientId);
+    } else if (patient_id) {
+      // For non-patient roles, allow filtering by patient_id if provided
       conditions.push('p.patient_id = ?');
       params.push(patient_id);
     }
@@ -66,10 +100,25 @@ router.get('/', async (req, res) => {
       );
 
       prescription.items = items;
+
+      // Check if prescription has been dispensed
+      const [dispenseCheck] = await db.query(
+        `
+        SELECT COUNT(*) as dispense_count,
+               MAX(dispensed_date) as last_dispensed_date
+        FROM dispense_events
+        WHERE prescription_id = ?
+      `,
+        [prescription.prescription_id]
+      );
+
+      prescription.is_dispensed = (dispenseCheck[0]?.dispense_count || 0) > 0;
+      prescription.last_dispensed_date = dispenseCheck[0]?.last_dispensed_date || null;
     }
 
     res.json({
       success: true,
+      prescriptions: results, // Alias for compatibility
       data: results,
     });
   } catch (error) {
@@ -83,7 +132,7 @@ router.get('/', async (req, res) => {
 });
 
 // Get prescription by ID
-router.get('/:id', async (req, res) => {
+router.get('/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -108,6 +157,32 @@ router.get('/:id', async (req, res) => {
     }
 
     const prescription = results[0];
+
+    // Role-based access control: Patients can only see their own prescriptions
+    if (req.user.role === 'patient') {
+      // Get patient_id from user's linked patient record
+      let userPatientId = req.user.patient_id;
+      if (!userPatientId) {
+        // Try to find patient record for this user
+        const [patientRows] = await db.query(`
+          SELECT patient_id FROM patients 
+          WHERE created_by = ? OR email IN (SELECT email FROM users WHERE user_id = ?)
+          LIMIT 1
+        `, [req.user.user_id, req.user.user_id]);
+        
+        if (patientRows.length > 0) {
+          userPatientId = patientRows[0].patient_id;
+        }
+      }
+      
+      // Check if prescription belongs to this patient
+      if (prescription.patient_id !== userPatientId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied: You can only view your own prescriptions',
+        });
+      }
+    }
 
     // Get prescription items
     const [items] = await db.query(
@@ -367,6 +442,66 @@ router.post('/', authenticateToken, async (req, res) => {
         medication_id: item.medication_id,
         quantity: item.quantity,
       });
+    }
+
+    // Auto-create medication reminders for each prescription item
+    // This allows patients to track their medications from the moment they're prescribed
+    for (const item of items) {
+      try {
+        // Get medication name from medication_id
+        const [medicationCheck] = await connection.query(
+          'SELECT medication_name FROM medications WHERE medication_id = ?',
+          [item.medication_id]
+        );
+
+        if (medicationCheck.length > 0) {
+          const medication_name = medicationCheck[0].medication_name;
+
+          // Check if reminder already exists for this prescription and medication
+          const [existingReminder] = await connection.query(
+            'SELECT reminder_id FROM medication_reminders WHERE prescription_id = ? AND medication_name = ?',
+            [prescription_id, medication_name]
+          );
+
+          if (existingReminder.length === 0) {
+            const reminder_id = uuidv4();
+            
+            // Determine default reminder time based on frequency
+            // Default to 09:00:00, but could be customized based on frequency
+            let defaultReminderTime = '09:00:00';
+            if (item.frequency && item.frequency.toLowerCase().includes('twice')) {
+              defaultReminderTime = '09:00:00'; // Morning dose
+            } else if (item.frequency && item.frequency.toLowerCase().includes('three')) {
+              defaultReminderTime = '09:00:00'; // First dose of the day
+            }
+
+            // Create reminder with prescription details
+            await connection.query(
+              `
+              INSERT INTO medication_reminders (
+                reminder_id, prescription_id, patient_id, medication_name,
+                dosage, frequency, reminder_time, active, browser_notifications,
+                sound_preference, special_instructions
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, TRUE, TRUE, 'default', ?)
+            `,
+              [
+                reminder_id,
+                prescription_id,
+                patient_id,
+                medication_name,
+                item.dosage || null,
+                item.frequency || 'daily',
+                defaultReminderTime,
+                item.instructions || null,
+              ]
+            );
+          }
+        }
+      } catch (reminderError) {
+        // Log reminder creation error but don't fail the prescription creation
+        console.warn('Warning: Failed to create medication reminder for prescription:', reminderError.message);
+        // Continue with prescription creation even if reminder creation fails
+      }
     }
 
     // Log audit entry (D8)
@@ -693,7 +828,7 @@ router.post('/:id/dispense', authenticateToken, async (req, res) => {
       // Check if prescription item exists (D4)
       const [itemCheck] = await connection.query(
         `SELECT pi.prescription_item_id, pi.medication_id, pi.quantity, pi.dosage, pi.frequency,
-                m.medication_name
+                pi.instructions, m.medication_name
          FROM prescription_items pi
          JOIN medications m ON pi.medication_id = m.medication_id
          WHERE pi.prescription_item_id = ? AND pi.prescription_id = ?`,
@@ -712,6 +847,35 @@ router.post('/:id/dispense', authenticateToken, async (req, res) => {
 
       const prescriptionItem = itemCheck[0];
       const medication_id = prescriptionItem.medication_id;
+
+      // Check for duplicate dispenses - prevent multiple dispenses of the same item
+      const [existingDispenses] = await connection.query(
+        `SELECT SUM(quantity_dispensed) as total_dispensed
+         FROM dispense_events
+         WHERE prescription_item_id = ?`,
+        [prescription_item_id]
+      );
+
+      const totalDispensed = existingDispenses[0]?.total_dispensed || 0;
+      const remainingQuantity = prescriptionItem.quantity - totalDispensed;
+
+      if (remainingQuantity <= 0) {
+        await connection.rollback();
+        return res.status(400).json({
+          success: false,
+          message: `This prescription item has already been fully dispensed. Prescribed: ${prescriptionItem.quantity}, Already dispensed: ${totalDispensed}`,
+          prescription_item_id: prescription_item_id,
+        });
+      }
+
+      if (quantity_dispensed > remainingQuantity) {
+        await connection.rollback();
+        return res.status(400).json({
+          success: false,
+          message: `Cannot dispense ${quantity_dispensed} units. Only ${remainingQuantity} units remaining (Prescribed: ${prescriptionItem.quantity}, Already dispensed: ${totalDispensed})`,
+          prescription_item_id: prescription_item_id,
+        });
+      }
 
       // Check inventory availability (D4)
       const [inventoryCheck] = await connection.query(
@@ -770,29 +934,45 @@ router.post('/:id/dispense', authenticateToken, async (req, res) => {
       // Trigger reminder creation - save to medication_reminders (D4)
       // Check if reminder already exists for this prescription item
       try {
-      const [existingReminder] = await connection.query(
-        'SELECT reminder_id FROM medication_reminders WHERE prescription_id = ? AND medication_name = ?',
-        [id, prescriptionItem.medication_name]
-      );
-
-      if (existingReminder.length === 0) {
-        const reminder_id = uuidv4();
-        await connection.query(
-          `
-          INSERT INTO medication_reminders (
-            reminder_id, prescription_id, patient_id, medication_name,
-            dosage, frequency, reminder_time, active
-          ) VALUES (?, ?, ?, ?, ?, ?, '09:00:00', TRUE)
-        `,
-          [
-            reminder_id,
-            id,
-            prescription.patient_id,
-            prescriptionItem.medication_name,
-            prescriptionItem.dosage,
-            prescriptionItem.frequency,
-          ]
+        const [existingReminder] = await connection.query(
+          'SELECT reminder_id FROM medication_reminders WHERE prescription_id = ? AND medication_name = ?',
+          [id, prescriptionItem.medication_name]
         );
+
+        if (existingReminder.length === 0) {
+          const reminder_id = uuidv4();
+          
+          // Determine default reminder time based on frequency
+          let defaultReminderTime = '09:00:00';
+          const frequencyLower = (prescriptionItem.frequency || '').toLowerCase();
+          if (frequencyLower.includes('twice') || frequencyLower.includes('bid')) {
+            defaultReminderTime = '09:00:00'; // Morning dose
+          } else if (frequencyLower.includes('three') || frequencyLower.includes('tid')) {
+            defaultReminderTime = '09:00:00'; // First dose of the day
+          } else if (frequencyLower.includes('four') || frequencyLower.includes('qid')) {
+            defaultReminderTime = '08:00:00'; // First dose of the day
+          }
+
+          // Create reminder with all fields including instructions
+          await connection.query(
+            `
+            INSERT INTO medication_reminders (
+              reminder_id, prescription_id, patient_id, medication_name,
+              dosage, frequency, reminder_time, active, browser_notifications,
+              sound_preference, special_instructions
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, TRUE, TRUE, 'default', ?)
+          `,
+            [
+              reminder_id,
+              id,
+              prescription.patient_id,
+              prescriptionItem.medication_name,
+              prescriptionItem.dosage || null,
+              prescriptionItem.frequency || 'Once daily',
+              defaultReminderTime,
+              prescriptionItem.instructions || null,
+            ]
+          );
         }
       } catch (reminderError) {
         // Log reminder creation error but don't fail the dispense
@@ -830,7 +1010,44 @@ router.post('/:id/dispense', authenticateToken, async (req, res) => {
       });
     }
 
+    // Get patient's user_id before committing (for socket emission)
+    // Relationship: patients.created_by = users.user_id OR patients.email = users.email
+    let patientUserId = null;
+    if (prescription.patient_id) {
+      const [patientUser] = await connection.query(
+        `SELECT u.user_id 
+         FROM patients p
+         LEFT JOIN users u ON p.created_by = u.user_id OR p.email = u.email
+         WHERE p.patient_id = ?
+         LIMIT 1`,
+        [prescription.patient_id]
+      );
+      if (patientUser.length > 0) {
+        patientUserId = patientUser[0].user_id;
+      }
+    }
+
     await connection.commit();
+
+    // Emit socket event to patient for real-time update of medications list
+    // This automatically updates the "My Medications" section in Refill Requests tab
+    if (io && prescription.patient_id) {
+      const socketData = {
+        patient_id: prescription.patient_id,
+        prescription_id: id,
+        prescription_number: prescription.prescription_number,
+        dispense_events: dispenseEvents,
+        message: 'Medication dispensed successfully',
+      };
+
+      // Emit to patient room
+      io.to(`patient_${prescription.patient_id}`).emit('medicationDispensed', socketData);
+      
+      // Also emit to user room if patient has a user account
+      if (patientUserId) {
+        io.to(`user_${patientUserId}`).emit('medicationDispensed', socketData);
+      }
+    }
 
     res.json({
       success: true,
